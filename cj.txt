@@ -27,3 +27,16 @@
   If you want, I’d do orbit camera controls next.
 
   1 background terminal running · /ps to view · /stop to close
+
+  Good. The remote master branch now has the C++/Qt project checkpoint you wanted.
+
+  Current committed state:
+
+  - repo: https://github.com/cjchng/cdx-cj-nppm_dev_cpp_pixel_2_ray/tree/master
+  - checkpoint commit: f97b910f015832565ffca15ded17360db22eb577
+
+  Next time you want to continue from this point, use:
+
+  cd /home/cj/Documents/cdx-cj-nppm_dev_cpp_pixel_2_ray
+  git pull origin master
+
