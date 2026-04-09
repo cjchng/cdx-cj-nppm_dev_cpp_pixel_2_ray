@@ -13,6 +13,9 @@ This directory contains a C++/Qt Widgets rewrite of the original browser-based s
 
 You need a C++17 compiler, CMake, and Qt6 Widgets development packages.
 
+For the Ubuntu package list, setup issues we hit, and an explanation of what each installed package does, see [SETUP_AND_TROUBLESHOOTING.md](/home/cj/Documents/cdx-cj-nppm_dev_cpp_pixel_2_ray/SETUP_AND_TROUBLESHOOTING.md).
+For the normal edit-build-test loop after setup is working, see [DEVELOPER_WORKFLOW.md](/home/cj/Documents/cdx-cj-nppm_dev_cpp_pixel_2_ray/DEVELOPER_WORKFLOW.md).
+
 ```bash
 cmake -S . -B build
 cmake --build build
