@@ -1,0 +1,29 @@
+ Step-by-step check once it opens:
+
+  1. Confirm the window appears and does not crash immediately.
+  2. Check the right-side info panel updates.
+  3. Confirm you see the shaded sphere and wireframe.
+  4. Press x, X, y, Y, z, Z and verify active selection changes.
+  5. Press w/s, a/d, q/e and verify the frame moves.
+  6. Left-click and drag a handle to confirm length updates.
+  7. Right-click to open the context menu and toggle items.
+
+  If the window opens, tell me what you actually see: blank window, distorted sphere, missing handles, drag not working, etc. Then I’ll
+  debug the first visible issue.
+
+
+› Everything Good.
+
+
+• Good. The current Qt/OpenGL rewrite is working end to end in /home/cj/Documents/cdx-cj-nppm_dev_cpp_pixel_2_ray.
+
+  At this point the useful next options are:
+
+  - add orbit/pan camera controls so the view is not fixed isometric
+  - improve handle picking depth behavior and hover feedback
+  - add widget-level Qt event tests on top of the helper tests
+  - polish rendering further with thicker wireframe options, labels, or better lighting
+
+  If you want, I’d do orbit camera controls next.
+
+  1 background terminal running · /ps to view · /stop to close
