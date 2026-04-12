@@ -73,6 +73,7 @@ private:
     void appendTriangle(std::vector<Vertex> &vertices, const QVector3D &a, const QVector3D &b, const QVector3D &c, const QColor &color, float alpha = 1.0f) const;
     void appendSphereSurface(std::vector<Vertex> &vertices) const;
     void appendSphereWireframe(std::vector<Vertex> &vertices) const;
+    void appendPanoramaBand(std::vector<Vertex> &surfaceVertices, std::vector<Vertex> &lineVertices) const;
     void appendFrameGeometry(std::vector<Vertex> &lineVertices, std::vector<Vertex> &pointVertices) const;
     void drawVertices(GLenum mode, const std::vector<Vertex> &vertices, float lineWidth = 1.0f, float pointSize = 1.0f);
     ProjectedPoint projectPoint(const QVector3D &worldPoint) const;

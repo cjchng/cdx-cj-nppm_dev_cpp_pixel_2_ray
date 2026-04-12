@@ -37,6 +37,8 @@ struct State {
     ComponentId active = ComponentId::PositiveX;
     bool showRearWireframe = true;
     bool showLocalFrame = true;
+    bool showPanoramaBand = true;
+    bool showXTangentCylinder = true;
     bool fixGlobalCenter = true;
 };
 
@@ -51,6 +53,7 @@ float clampLength(float value, float minValue = kMinLength, float maxValue = kMa
 float projectDeltaOntoDirection(const QVector3D &startPoint, const QVector3D &currentPoint, const QVector3D &direction);
 QVector3D latLonToVector(float latitudeDeg, float longitudeDeg, float radius);
 Frame getLocalFrame(float latitudeDeg, float longitudeDeg, float rollDeg = 0.0f);
+QVector3D localBandPoint(const Frame &frame, float azimuthDeg, float elevationDeg, float radius);
 ComponentMeta componentMeta(ComponentId id);
 QVector3D componentDirection(const Frame &frame, ComponentId id);
 QColor axisColor(char axis);

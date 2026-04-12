@@ -67,6 +67,19 @@ Frame getLocalFrame(float latitudeDeg, float longitudeDeg, float rollDeg) {
     return {xAxis, yAxis, zAxis};
 }
 
+QVector3D localBandPoint(const Frame &frame, float azimuthDeg, float elevationDeg, float radius) {
+    const float azimuth = degToRad(azimuthDeg);
+    const float elevation = degToRad(elevationDeg);
+    const float cosElevation = std::cos(elevation);
+
+    const QVector3D direction =
+        frame.xAxis * (std::cos(azimuth) * cosElevation)
+        + frame.yAxis * (std::sin(azimuth) * cosElevation)
+        + frame.zAxis * std::sin(elevation);
+
+    return normalizeSafe(direction) * radius;
+}
+
 ComponentMeta componentMeta(ComponentId id) {
     switch (id) {
     case ComponentId::PositiveX:
@@ -126,6 +139,9 @@ void runSanityChecks() {
     Q_ASSERT(std::abs(frame.xAxis.x()) < 1e-5f && std::abs(frame.xAxis.y() - 1.0f) < 1e-5f);
     Q_ASSERT(std::abs(frame.yAxis.z() - 1.0f) < 1e-5f);
     Q_ASSERT(std::abs(frame.zAxis.x() - 1.0f) < 1e-5f);
+
+    const QVector3D bandPoint = localBandPoint(frame, 0.0f, 0.0f, 2.0f);
+    Q_ASSERT(std::abs(bandPoint.y() - 2.0f) < 1e-5f);
 }
 
 }  // namespace FrameMath

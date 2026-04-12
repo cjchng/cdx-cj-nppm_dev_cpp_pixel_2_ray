@@ -23,6 +23,7 @@ private slots:
     void latLonToVector_mapsEquatorAndPole();
     void getLocalFrame_returnsExpectedBasis();
     void getLocalFrame_appliesRoll();
+    void localBandPoint_mapsLocalFrameAngles();
     void componentDirection_preservesAxisAndSign();
     void projectDeltaOntoDirection_returnsSignedMovement();
     void clampLength_enforcesLimits();
@@ -45,6 +46,23 @@ void FrameMathTests::getLocalFrame_appliesRoll() {
     QVERIFY(approxVector(frame.xAxis, QVector3D(0.0f, 0.0f, 1.0f)));
     QVERIFY(approxVector(frame.yAxis, QVector3D(0.0f, -1.0f, 0.0f)));
     QVERIFY(approxVector(frame.zAxis, QVector3D(1.0f, 0.0f, 0.0f)));
+}
+
+void FrameMathTests::localBandPoint_mapsLocalFrameAngles() {
+    const FrameMath::Frame frame = FrameMath::getLocalFrame(0.0f, 0.0f, 0.0f);
+
+    QVERIFY(approxVector(
+        FrameMath::localBandPoint(frame, 0.0f, 0.0f, 2.0f),
+        QVector3D(0.0f, 2.0f, 0.0f)
+    ));
+    QVERIFY(approxVector(
+        FrameMath::localBandPoint(frame, 90.0f, 0.0f, 2.0f),
+        QVector3D(0.0f, 0.0f, 2.0f)
+    ));
+    QVERIFY(approxVector(
+        FrameMath::localBandPoint(frame, 0.0f, 90.0f, 2.0f),
+        QVector3D(2.0f, 0.0f, 0.0f)
+    ));
 }
 
 void FrameMathTests::componentDirection_preservesAxisAndSign() {

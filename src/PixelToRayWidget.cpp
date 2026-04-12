@@ -13,6 +13,8 @@ namespace {
 
 constexpr int kSphereSegments = 64;
 constexpr int kGridSteps = 6;
+constexpr int kPanoramaSegments = 144;
+constexpr float kPi = 3.14159265358979323846f;
 constexpr float kHandleRadius = 8.0f;
 constexpr float kHandlePointSize = 14.0f;
 constexpr float kActiveHandlePointSize = 20.0f;
@@ -34,13 +36,15 @@ QString statusText(const FrameMath::State &state, const FrameMath::ComponentLeng
                "roll: %4\n"
                "zoom: %5\n"
                "center: %6\n"
+               "y trace: %7\n"
+               "x cylinder: %8\n"
                "\n"
-               "%7\n"
-               "%8\n"
                "%9\n"
                "%10\n"
                "%11\n"
                "%12\n"
+               "%13\n"
+               "%14\n"
                "\n"
                "x/X y/Y z/Z    : select +/- component\n"
                "w/s            : latitude +/-\n"
@@ -54,6 +58,8 @@ QString statusText(const FrameMath::State &state, const FrameMath::ComponentLeng
         .arg(state.roll, 0, 'f', 1)
         .arg(zoom, 0, 'f', 2)
         .arg(state.fixGlobalCenter ? QStringLiteral("fixed") : QStringLiteral("move"))
+        .arg(state.showPanoramaBand ? QStringLiteral("on") : QStringLiteral("off"))
+        .arg(state.showXTangentCylinder ? QStringLiteral("on") : QStringLiteral("off"))
         .arg(componentValue(FrameMath::ComponentId::PositiveX))
         .arg(componentValue(FrameMath::ComponentId::NegtiveX))
         .arg(componentValue(FrameMath::ComponentId::PositiveY))
@@ -124,6 +130,7 @@ void PixelToRayWidget::paintGL() {
     activePointVertices.reserve(2);
 
     appendSphereSurface(surfaceVertices);
+    appendPanoramaBand(surfaceVertices, lineVertices);
     appendSphereWireframe(lineVertices);
     appendFrameGeometry(lineVertices, pointVertices);
 
@@ -346,11 +353,11 @@ void PixelToRayWidget::appendSphereSurface(std::vector<Vertex> &vertices) const 
         const float diffuse = std::max(0.0f, QVector3D::dotProduct(normal, lightDir));
         const float rim = std::pow(1.0f - std::max(0.0f, QVector3D::dotProduct(normal, (cameraPosition() - point).normalized())), 2.0f);
         const float shade = 0.18f + diffuse * 0.30f + rim * 0.22f;
-        const QColor base(0x2a, 0x3d, 0x5f);
+        const QColor base(0x4f, 0x3f, 0x2f);
         return QColor::fromRgbF(
-            std::min(1.0f, base.redF() + shade * 0.25f),
-            std::min(1.0f, base.greenF() + shade * 0.30f),
-            std::min(1.0f, base.blueF() + shade * 0.38f)
+            std::min(1.0f, base.redF() + shade * 0.34f),
+            std::min(1.0f, base.greenF() + shade * 0.26f),
+            std::min(1.0f, base.blueF() + shade * 0.16f)
         );
     };
 
@@ -413,6 +420,60 @@ void PixelToRayWidget::appendSphereWireframe(std::vector<Vertex> &vertices) cons
             }
             previous = current;
         }
+    }
+}
+
+void PixelToRayWidget::appendPanoramaBand(std::vector<Vertex> &surfaceVertices, std::vector<Vertex> &lineVertices) const {
+    if (!m_state.showPanoramaBand && !m_state.showXTangentCylinder) {
+        return;
+    }
+
+    const FrameMath::Frame frame = currentFrame();
+    const QColor xTraceColor(0xff, 0xd1, 0x66);
+    const QColor yTraceColor(0x72, 0xf1, 0xb8);
+    const QColor xCylinderFill(0x00, 0x2e, 0x99);
+
+    auto circlePoint = [&](const QVector3D &axisA, const QVector3D &axisB, float azimuthDeg) {
+        const float radians = azimuthDeg * kPi / 180.0f;
+        return (axisA * std::cos(radians) + axisB * std::sin(radians)).normalized() * FrameMath::kSphereRadius;
+    };
+
+    auto appendGreatCircleTrace = [&](const QVector3D &axisA, const QVector3D &axisB, const QColor &color) {
+        QVector3D previous = circlePoint(axisA, axisB, 0.0f);
+        for (int segment = 1; segment <= kPanoramaSegments; ++segment) {
+            const float azimuth = 360.0f * static_cast<float>(segment) / static_cast<float>(kPanoramaSegments);
+            const QVector3D current = circlePoint(axisA, axisB, azimuth);
+            appendLine(lineVertices, previous, current, color, 0.95f);
+            previous = current;
+        }
+    };
+
+    if (m_state.showXTangentCylinder) {
+        const float positiveHeight = m_components[static_cast<int>(FrameMath::ComponentId::PositiveY)];
+        const float negativeHeight = m_components[static_cast<int>(FrameMath::ComponentId::NegtiveY)];
+
+        for (int segment = 0; segment < kPanoramaSegments; ++segment) {
+            const float azimuth0 = 360.0f * static_cast<float>(segment) / static_cast<float>(kPanoramaSegments);
+            const float azimuth1 = 360.0f * static_cast<float>(segment + 1) / static_cast<float>(kPanoramaSegments);
+
+            const QVector3D base0 = circlePoint(frame.zAxis, frame.xAxis, azimuth0);
+            const QVector3D base1 = circlePoint(frame.zAxis, frame.xAxis, azimuth1);
+            const QVector3D top0 = base0 + frame.yAxis * positiveHeight;
+            const QVector3D top1 = base1 + frame.yAxis * positiveHeight;
+            const QVector3D bottom0 = base0 - frame.yAxis * negativeHeight;
+            const QVector3D bottom1 = base1 - frame.yAxis * negativeHeight;
+
+            appendTriangle(surfaceVertices, bottom0, bottom1, top1, xCylinderFill, 0.34f);
+            appendTriangle(surfaceVertices, bottom0, top1, top0, xCylinderFill, 0.34f);
+            appendLine(lineVertices, top0, top1, xTraceColor, 0.78f);
+            appendLine(lineVertices, bottom0, bottom1, xTraceColor, 0.78f);
+        }
+
+        appendGreatCircleTrace(frame.zAxis, frame.xAxis, xTraceColor);
+    }
+
+    if (m_state.showPanoramaBand) {
+        appendGreatCircleTrace(frame.zAxis, frame.yAxis, yTraceColor);
     }
 }
 
@@ -545,6 +606,14 @@ void PixelToRayWidget::showContextMenu(const QPoint &globalPosition) {
     frameAction->setCheckable(true);
     frameAction->setChecked(m_state.showLocalFrame);
 
+    QAction *panoramaAction = menu.addAction(tr("Y-axis great-circle trace"));
+    panoramaAction->setCheckable(true);
+    panoramaAction->setChecked(m_state.showPanoramaBand);
+
+    QAction *xCylinderAction = menu.addAction(tr("X-axis tangential cylinder"));
+    xCylinderAction->setCheckable(true);
+    xCylinderAction->setChecked(m_state.showXTangentCylinder);
+
     QAction *centerAction = menu.addAction(tr("Global center (fix/move)"));
     centerAction->setCheckable(true);
     centerAction->setChecked(m_state.fixGlobalCenter);
@@ -554,6 +623,10 @@ void PixelToRayWidget::showContextMenu(const QPoint &globalPosition) {
         m_state.showRearWireframe = rearAction->isChecked();
     } else if (chosen == frameAction) {
         m_state.showLocalFrame = frameAction->isChecked();
+    } else if (chosen == panoramaAction) {
+        m_state.showPanoramaBand = panoramaAction->isChecked();
+    } else if (chosen == xCylinderAction) {
+        m_state.showXTangentCylinder = xCylinderAction->isChecked();
     } else if (chosen == centerAction) {
         m_state.fixGlobalCenter = centerAction->isChecked();
     }
