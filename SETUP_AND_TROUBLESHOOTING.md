@@ -1,4 +1,4 @@
-# Setup And Troubleshooting
+≠# Setup And Troubleshooting
 
 This note records the setup problems encountered while configuring this project on Ubuntu 22.04 and explains what each required build tool or library does.
 
