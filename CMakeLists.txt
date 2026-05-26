@@ -24,8 +24,6 @@ add_executable(pixel_2_ray_qt
     src/main.cpp
     src/MainWindow.cpp
     src/PixelToRayWidget.cpp
-        src/FrameMathHelper.cpp
-        src/FrameMathHelper.h
 )
 
 target_link_libraries(pixel_2_ray_qt PRIVATE

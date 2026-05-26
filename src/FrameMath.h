@@ -40,6 +40,8 @@ struct State {
     bool showPanoramaBand = true;
     bool showXTangentCylinder = true;
     bool fixGlobalCenter = true;
+    bool hideSurfaceDepth = true;
+    bool perspectiveProjection = false;
 };
 
 constexpr float kSphereRadius = 1.0f;

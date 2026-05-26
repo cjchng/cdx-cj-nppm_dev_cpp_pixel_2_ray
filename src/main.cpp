@@ -18,8 +18,9 @@ int main(int argc, char *argv[]) {
     QSurfaceFormat::setDefaultFormat(format);
 
     QApplication app(argc, argv);
+    app.setOrganizationName(QStringLiteral("cj"));
+    app.setApplicationName(QStringLiteral("pixel_to_ray_qt"));
     MainWindow window;
-    window.show();
 
     return app.exec();
 }

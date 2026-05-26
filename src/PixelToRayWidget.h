@@ -8,7 +8,9 @@
 #include <QOpenGLFunctions>
 #include <QOpenGLWidget>
 #include <QPointF>
+#include <QQuaternion>
 #include <QScopedPointer>
+#include <QImage>
 #include <QVector2D>
 #include <QVector3D>
 #include <QVector4D>
@@ -28,28 +30,75 @@ public:
     float roll() const;
     float zoom() const;
     float capPolarAngle() const;
+    float globeRadius() const;
+    QQuaternion globeOrientation() const;
+    QString fisheyeImagePath() const;
+    float perspectiveFovY() const;
+    float cameraEyeOffsetX() const;
+    float cameraEyeOffsetY() const;
+    float cameraEyeOffsetZ() const;
+    float cameraTargetX() const;
+    float cameraTargetY() const;
+    float cameraTargetZ() const;
+    float cameraUpX() const;
+    float cameraUpY() const;
+    float cameraUpZ() const;
+    float anchorGlobalX() const;
+    float anchorGlobalY() const;
+    float anchorGlobalZ() const;
     float componentLength(FrameMath::ComponentId id) const;
     QString activeComponentKey() const;
     bool isGlobalCenterFixed() const;
     bool isPanoramaBandVisible() const;
     bool isXTangentCylinderVisible() const;
+    bool isSurfaceDepthHidingEnabled() const;
+    bool isPerspectiveProjection() const;
     bool isLatitudeLocked() const;
     bool isLongitudeLocked() const;
     bool isRollLocked() const;
     bool isZoomLocked() const;
     bool isCapPolarAngleLocked() const;
+    bool isGlobeRadiusLocked() const;
+    bool isCameraEyeOffsetXLocked() const;
+    bool isCameraEyeOffsetYLocked() const;
+    bool isCameraEyeOffsetZLocked() const;
+    bool isCameraUpXLocked() const;
+    bool isCameraUpYLocked() const;
+    bool isCameraUpZLocked() const;
     bool isComponentLocked(FrameMath::ComponentId id) const;
     void setLatitude(float value);
     void setLongitude(float value);
     void setRoll(float value);
     void setZoom(float value);
     void setCapPolarAngle(float value);
+    void setGlobeRadius(float value);
+    void setGlobeOrientation(const QQuaternion &orientation);
+    bool setFisheyeImagePath(const QString &path);
+    void setPerspectiveFovY(float value);
+    void setCameraEyeOffsetX(float value);
+    void setCameraEyeOffsetY(float value);
+    void setCameraEyeOffsetZ(float value);
+    void setCameraUpX(float value);
+    void setCameraUpY(float value);
+    void setCameraUpZ(float value);
+    void setGlobeRadiusLocked(bool locked);
     void setComponentLength(FrameMath::ComponentId id, float value);
+    void setGlobalCenterFixed(bool fixed);
+    void setPanoramaBandVisible(bool visible);
+    void setXTangentCylinderVisible(bool visible);
+    void setSurfaceDepthHidingEnabled(bool enabled);
+    void setPerspectiveProjection(bool enabled);
     void setLatitudeLocked(bool locked);
     void setLongitudeLocked(bool locked);
     void setRollLocked(bool locked);
     void setZoomLocked(bool locked);
     void setCapPolarAngleLocked(bool locked);
+    void setCameraEyeOffsetXLocked(bool locked);
+    void setCameraEyeOffsetYLocked(bool locked);
+    void setCameraEyeOffsetZLocked(bool locked);
+    void setCameraUpXLocked(bool locked);
+    void setCameraUpYLocked(bool locked);
+    void setCameraUpZLocked(bool locked);
     void setComponentLocked(FrameMath::ComponentId id, bool locked);
 
 signals:
@@ -67,14 +116,6 @@ protected:
     void contextMenuEvent(QContextMenuEvent *event) override;
 
 private:
-    //cj-copilot: these member variables store the current state of the widget,
-    // including the frame parameters (latitude, longitude
-    FrameMath::State m_state; // holds latitude, longitude, roll, active flags, and UI toggles
-    FrameMath::ComponentLengths m_components;
-    float m_zoom = 1.0f;
-    float m_capPolarAngle = 180.0f;
-    //cj-end: m_viewProjection is the combined view and projection matrix used for rendering
-    //QMatrix4x4 m_viewProjection;
     struct Vertex {
         QVector3D position;
         QVector4D color;
@@ -89,7 +130,8 @@ private:
         enum class Mode {
             None,
             ComponentLength,
-            SurfaceTrack
+            SurfaceTrack,
+            GlobalAxisTrack
         };
 
         bool active = false;
@@ -97,6 +139,9 @@ private:
         FrameMath::ComponentId component = FrameMath::ComponentId::PositiveX;
         float startLength = 0.0f;
         QPointF startMouse;
+        bool preferRearHemisphere = false;
+        QQuaternion startOrientation;
+        QVector3D grabbedWorldPoint;
     };
 
     struct HandleVisual {
@@ -111,13 +156,22 @@ private:
         bool roll = false;
         bool zoom = false;
         bool capPolarAngle = false;
+        bool globeRadius = true;
+        bool cameraEyeOffsetX = false;
+        bool cameraEyeOffsetY = false;
+        bool cameraEyeOffsetZ = false;
+        bool cameraUpX = false;
+        bool cameraUpY = false;
+        bool cameraUpZ = false;
         FrameMath::ComponentLengths components{false, false, false, false, false, true};
     };
 
     FrameMath::Frame currentFrame() const;
     QVector3D currentOrigin() const;
     QVector3D currentSceneCenter() const;
+    QVector3D cameraTarget() const;
     QVector3D cameraPosition() const;
+    QVector3D cameraUp() const;
     float effectiveCapPolarAngle() const;
     float minimumVisibleLatitude() const;
     void clampStateToVisibleCap();
@@ -131,31 +185,72 @@ private:
                     float alpha = 1.0f,
                     float widthPixels = 0.0f) const;
     void appendTriangle(std::vector<Vertex> &vertices, const QVector3D &a, const QVector3D &b, const QVector3D &c, const QColor &color, float alpha = 1.0f) const;
+    QVector3D screenSpaceOffsetAtPoint(const QVector3D &point, float dxPixels, float dyPixels) const;
+    void appendGlobalTerminalMarker(std::vector<Vertex> &lineVertices,
+                                    const QVector3D &point,
+                                    const QColor &color,
+                                    bool positive) const;
+    void appendLocalOriginMarker(std::vector<Vertex> &lineVertices,
+                                 std::vector<Vertex> &pointVertices,
+                                 const QVector3D &origin) const;
     void appendSphereSurface(std::vector<Vertex> &vertices) const;
     void appendSphereWireframe(std::vector<Vertex> &vertices) const;
-    void appendPanoramaBand(std::vector<Vertex> &surfaceVertices, std::vector<Vertex> &lineVertices) const;
+    bool loadProjectionImage(const QString &path);
+    void detectProjectionCircle();
+    QColor sampleProjectionColorNearest(const QVector3D &worldPoint) const;
+    QColor sampleProjectionColor(const QVector3D &worldPoint) const;
+    void appendGlobalAxisTraces(std::vector<Vertex> &lineVertices,
+                                std::vector<Vertex> &positivePointVertices,
+                                std::vector<Vertex> &negativePointVertices,
+                                std::vector<Vertex> &centerPointVertices) const;
+    void appendPanoramaBand(std::vector<Vertex> &cylinderSurfaceVertices,
+                            std::vector<Vertex> &lineVertices) const;
     void appendFrameGeometry(std::vector<Vertex> &lineVertices,
                              std::vector<Vertex> &activeLineVertices,
                              std::vector<Vertex> &pointVertices) const;
-    void drawVertices(GLenum mode, const std::vector<Vertex> &vertices, float lineWidth = 1.0f, float pointSize = 1.0f);
+    void drawVertices(GLenum mode,
+                      const std::vector<Vertex> &vertices,
+                      float lineWidth = 1.0f,
+                      float pointSize = 1.0f,
+                      bool depthWrite = true,
+                      bool depthTest = true);
     ProjectedPoint projectPoint(const QVector3D &worldPoint) const;
     QVector2D projectVectorToScreen(const QVector3D &origin, const QVector3D &direction, float length = 1.0f) const;
     HandleVisual handleVisual(FrameMath::ComponentId id) const;
     std::vector<InteractionLogic::HandleCandidate> handleCandidates() const;
     bool tryPickHandle(const QPointF &position, FrameMath::ComponentId &picked) const;
+    bool tryPickGlobalAxisEndpoint(const QPointF &position,
+                                   QVector3D &pickedWorldPoint,
+                                   bool &preferRearHemisphere) const;
     bool tryMapScreenToSphere(const QPointF &position, QVector3D &spherePoint) const;
-    void updateSurfaceTracking(const QPointF &position);
+    bool tryMapScreenToSphere(const QPointF &position, bool preferRearHemisphere, QVector3D &spherePoint) const;
+    bool tryMapScreenToSphere(const QPointF &position,
+                              bool preferRearHemisphere,
+                              bool requireVisibleCap,
+                              QVector3D &spherePoint) const;
+    void updateSurfaceTracking(const QPointF &position, bool preferRearHemisphere = false);
+    void updateGlobalAxisTracking(const QPointF &position);
     void updateDrag(const QPointF &position);
     void emitStatus();
     void showContextMenu(const QPoint &globalPosition);
-    FrameMath::Frame frameFromWidgetState() const;
     bool isComponentValueLocked(FrameMath::ComponentId id) const;
 
-    //FrameMath::State m_state;
-    //FrameMath::ComponentLengths m_components{};
+    FrameMath::State m_state;
+    FrameMath::ComponentLengths m_components;
+    float m_globeRadius = FrameMath::kSphereRadius;
+    float m_zoom = 1.0f;
+    float m_capPolarAngle = 180.0f;
+    QQuaternion m_globeOrientation{1.0f, 0.0f, 0.0f, 0.0f};
+    QVector3D m_cameraEyeOffset{4.0f, 4.0f, 4.0f};
+    QVector3D m_cameraUpVector{0.0f, 0.0f, 1.0f};
+    float m_perspectiveFovY = 35.0f;
+    QImage m_projectionImage;
+    QString m_projectionImagePath;
+    QPointF m_projectionCircleCenter;
+    float m_projectionCircleRadius = 0.0f;
+    bool m_hasActiveComponent = true;
     DragState m_drag;
     LockState m_locks;
-    //float m_zoom = 1.0f;
     QMatrix4x4 m_viewProjection;
     QScopedPointer<QOpenGLShaderProgram> m_program;
     QOpenGLBuffer m_vertexBuffer{QOpenGLBuffer::VertexBuffer};
