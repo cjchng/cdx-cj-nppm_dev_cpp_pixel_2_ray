@@ -14,7 +14,9 @@ int main(int argc, char *argv[]) {
     format.setStencilBufferSize(8);
     format.setVersion(3, 2); //
     format.setProfile(QSurfaceFormat::CoreProfile); //
-    format.setSamples(4);
+    // Fullscreen QOpenGLWidget on a 4K/HiDPI display can fail to allocate its
+    // internal backing FBO when multisampling is enabled. Keep startup robust.
+    format.setSamples(0);
     QSurfaceFormat::setDefaultFormat(format);
 
     QApplication app(argc, argv);

@@ -102,15 +102,22 @@ void placeWindowNearTopRight(QMainWindow *window) {
     window->move(std::max(available.left() + margin, x), y);
 }
 
-void showWindowFullScreenOnPreferredScreen(QMainWindow *window) {
+void showWindowOnPreferredScreen(QMainWindow *window) {
     QScreen *screen = preferredStartupScreen(window);
-    if (screen != nullptr) {
-        window->winId();
-        if (QWindow *handle = window->windowHandle()) {
-            handle->setScreen(screen);
-        }
+    if (screen == nullptr) {
+        window->show();
+        return;
     }
-    window->showFullScreen();
+
+    window->winId();
+    if (QWindow *handle = window->windowHandle()) {
+        handle->setScreen(screen);
+    }
+
+    const QRect available = screen->availableGeometry();
+    const int margin = 24;
+    window->setGeometry(available.adjusted(margin, margin, -margin, -margin));
+    window->show();
 }
 
 QWidget *createSectionLabel(const QString &text, QWidget *parent) {
@@ -665,7 +672,7 @@ MainWindow::MainWindow(QWidget *parent)
 
     setWindowTitle(tr("Pixel To Ray Qt Window"));
     QTimer::singleShot(0, this, [this]() {
-        showWindowFullScreenOnPreferredScreen(this);
+        showWindowOnPreferredScreen(this);
     });
 }
 

@@ -1373,6 +1373,19 @@ void PixelToRayWidget::appendSphereSurface(std::vector<Vertex> &vertices) const 
         );
     };
 
+    auto shadedCapColor = [&](const QVector3D &point) {
+        const QVector3D normal = m_globeOrientation.rotatedVector(QVector3D(0.0f, 0.0f, -1.0f)).normalized();
+        const float diffuse = std::max(0.0f, QVector3D::dotProduct(normal, lightDir));
+        const float rim = std::pow(1.0f - std::max(0.0f, QVector3D::dotProduct(normal, (cameraPosition() - point).normalized())), 2.0f);
+        const float shade = 0.14f + diffuse * 0.24f + rim * 0.16f;
+        const QColor base(0x35, 0x2b, 0x20);
+        return QColor::fromRgbF(
+            std::min(1.0f, base.redF() + shade * 0.26f),
+            std::min(1.0f, base.greenF() + shade * 0.20f),
+            std::min(1.0f, base.blueF() + shade * 0.12f)
+        );
+    };
+
     for (int lat = 0; lat < latBands; ++lat) {
         const float lat0 = minLatitude + (90.0f - minLatitude) * static_cast<float>(lat) / static_cast<float>(latBands);
         const float lat1 = minLatitude + (90.0f - minLatitude) * static_cast<float>(lat + 1) / static_cast<float>(latBands);
@@ -1386,8 +1399,25 @@ void PixelToRayWidget::appendSphereSurface(std::vector<Vertex> &vertices) const 
             const QVector3D p10 = m_globeOrientation.rotatedVector(sphericalPoint(m_globeRadius, lat1, lon0));
             const QVector3D p11 = m_globeOrientation.rotatedVector(sphericalPoint(m_globeRadius, lat1, lon1));
 
-            appendTriangle(vertices, p00, p10, p11, shadedColor((p00 + p10 + p11) / 3.0f), 0.78f);
-            appendTriangle(vertices, p00, p11, p01, shadedColor((p00 + p11 + p01) / 3.0f), 0.78f);
+            appendTriangle(vertices, p00, p10, p11, shadedColor((p00 + p10 + p11) / 3.0f), 1.0f);
+            appendTriangle(vertices, p00, p11, p01, shadedColor((p00 + p11 + p01) / 3.0f), 1.0f);
+        }
+    }
+
+    if (minLatitude > -89.9f) {
+        const QVector3D capCenterLocal(0.0f, 0.0f, m_globeRadius * std::sin(qDegreesToRadians(minLatitude)));
+        const QVector3D capCenter = m_globeOrientation.rotatedVector(capCenterLocal);
+        QVector3D previous = m_globeOrientation.rotatedVector(sphericalPoint(m_globeRadius, minLatitude, 0.0f));
+        for (int segment = 1; segment <= lonBands; ++segment) {
+            const float longitude = 360.0f * static_cast<float>(segment) / static_cast<float>(lonBands);
+            const QVector3D current = m_globeOrientation.rotatedVector(sphericalPoint(m_globeRadius, minLatitude, longitude));
+            appendTriangle(vertices,
+                           capCenter,
+                           current,
+                           previous,
+                           shadedCapColor((capCenter + current + previous) / 3.0f),
+                           1.0f);
+            previous = current;
         }
     }
 }
