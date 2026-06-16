@@ -1,197 +1,519 @@
 # Cylinder Shader Texture Plan
 
-This note records the planned refactor for the `x`-axis tangential cylinder texture mapping.
+## Purpose
 
-## Goal
+This note refactors the plan for the `x`-axis tangential cylinder texture path.
 
-Replace the current coarse triangle-color approximation with a true shader-based projective texture mapping from the globe onto the cylinder wall.
+The goal is to replace the current triangle-centroid color approximation with a GPU shader path that projects every visible cylinder fragment back onto the globe image.
 
-The intended projection model is:
+The refactor should keep the current UI and geometry behavior:
 
-- the global center is the common origin
-- each cylinder wall point is projected back toward the globe
-- the globe intersection is then mapped into the fisheye image
+- the cylinder is still attached to the current local frame
+- the cylinder radius still comes from `globeRadius + positive_z`
+- the positive and negative cylinder heights still come from `positive_y` and `negtive_y`
+- surface-depth hiding and guide overlays should keep their current behavior
+- the existing CPU fallback colors should remain available when no valid image sample exists
 
-## Why The Current Result Is Coarse
+## Current Implementation
 
-The current implementation in [src/PixelToRayWidget.cpp](/Users/cj/Documents/cdx-cj-nppm_dev_cpp_pixel_2_ray/src/PixelToRayWidget.cpp:1597) does not compute a continuous texture.
+The current cylinder surface is generated in:
 
-Instead:
+- `src/PixelToRayWidget.cpp`
+- `PixelToRayWidget::appendPanoramaBand(...)`
 
-- each azimuth segment creates four wall triangles
-- each triangle gets one sampled color from its centroid
-- the positive `y` side uses only two color samples per segment
-- the negative `y` side uses only two color samples per segment
+The active texture sampling path is now:
 
-So the wall is effectively a small set of flat-colored patches, not a true projected texture.
+1. Build the x-tangential cylinder wall triangles in world coordinates.
+2. Emit matching `TexturedCylinderVertex` triangles with fallback colors.
+3. Draw them with `drawTexturedCylinderVertices(...)`.
+4. In the fragment shader, normalize the interpolated world position as the direction from the global center.
+5. Rotate that direction into globe-local coordinates.
+6. Convert the globe-local direction into fisheye image texture coordinates.
+7. Sample the uploaded fisheye `QOpenGLTexture` with nearest filtering.
+8. Fall back to `xPositiveCylinderFill` or `xNegativeCylinderFill` if the shader cannot use the image sample.
 
-## Planned Geometry Parameterization
+The legacy CPU comparison path is still generated:
 
-The cylinder wall should be parameterized by:
+1. Build each azimuth segment as four triangles.
+2. Compute one centroid per wall triangle.
+3. Call `sampleProjectionColorNearest(...)` for that centroid.
+4. Fill the whole triangle with that one sampled color.
+5. Fall back to `xPositiveCylinderFill` or `xNegativeCylinderFill` if the sample is invalid.
 
-- `u`: azimuth around the cylinder, in `[0, 1]`
-- `v`: height along local `y`, in `[0, 1]`
+That legacy path created visible flat patches because the cylinder wall was not sampled continuously. It remains useful for fallback/comparison work until the shader path has been visually accepted.
 
-Definitions:
+The relevant current calls are:
 
-- `R = globeRadius + positive_z`
-- `Hpos = positive_y * R`
-- `Hneg = negtive_y * R`
+```cpp
+const QColor positiveSampleA = sampleProjectionColorNearest((base0 + base1 + top1) / 3.0f);
+const QColor positiveSampleB = sampleProjectionColorNearest((base0 + top1 + top0) / 3.0f);
+const QColor negativeSampleA = sampleProjectionColorNearest((bottom0 + bottom1 + base1) / 3.0f);
+const QColor negativeSampleB = sampleProjectionColorNearest((bottom0 + base1 + base0) / 3.0f);
+```
+
+The shared color-only `Vertex` type still carries:
+
+```cpp
+QVector3D position;
+QVector4D color;
+```
+
+So the shared color-only shader can only draw pre-colored geometry. The cylinder shader uses `TexturedCylinderVertex` instead.
+
+## Target Behavior
+
+The target cylinder is textured by per-fragment projection:
+
+1. The CPU emits a cylinder wall mesh.
+2. The vertex shader passes each fragment enough world-space information to identify the wall point.
+3. The fragment shader projects that wall point back toward the globe center.
+4. The projected globe direction is converted into fisheye image coordinates.
+5. The shader samples the fisheye texture.
+
+The important change is where the lookup happens:
+
+- legacy CPU path: one CPU image lookup per triangle
+- active shader path: one GPU texture lookup per fragment
+
+That removes the coarse two-sample-per-side look along the `y` direction.
+
+## Coordinate Contract
+
+The cylinder is expressed in the current local frame:
+
+```text
+frame.xAxis
+frame.yAxis
+frame.zAxis
+```
+
+That frame already includes the global globe orientation.
+
+Use these state-derived values:
+
+```text
+R    = globeRadius + positive_z
+Hpos = positive_y * R
+Hneg = negtive_y * R
+```
+
+Parameterize the cylinder wall with:
+
+```text
+u in [0, 1]  azimuth around the cylinder
+v in [0, 1]  height from negative y to positive y
+```
 
 Then:
 
 ```text
 phi = 2*pi*u
-h = lerp(-Hneg, Hpos, v)
-P(u,v) = R*cos(phi)*zAxis + h*yAxis + R*sin(phi)*xAxis
+h   = mix(-Hneg, Hpos, v)
+
+base(u) = R*cos(phi)*frame.zAxis + R*sin(phi)*frame.xAxis
+P(u,v)  = base(u) + h*frame.yAxis
 ```
 
-where:
+`P(u,v)` is the world-space cylinder wall point.
 
-- `xAxis`
-- `yAxis`
-- `zAxis`
+The "global center" in this projection means the geometric globe center at world `(0, 0, 0)`. This is the same center used by the sphere and by the existing texture lookup. It is not the camera target selected by the `Fix Global Center` view toggle.
 
-are the current local frame axes.
+## Projection Contract
 
-`P(u,v)` is the cylinder wall point in world space.
-
-## Planned Projection Model
-
-For each wall point `P`:
-
-1. take the ray from the global center through `P`
-2. intersect that ray with the globe
-3. sample the globe image at that intersection
-
-Because the globe center is the world origin, the globe intersection is:
+For a cylinder wall point `P`, compute the globe direction:
 
 ```text
-G = normalize(P) * globeRadius
+worldDir = normalize(P)
 ```
 
-This is the key simplification of the planned method.
-
-## Planned Fisheye Mapping
-
-Once the globe intersection `G` is known:
-
-1. convert `G` into globe-local coordinates
-2. compute the fisheye polar angle from local `+z`
-3. convert that angle into equid-solid image radius
-4. convert the local `x/y` direction into image coordinates
-
-In math form:
+The globe intersection is conceptually:
 
 ```text
-Glocal = inverse(globeOrientation) * normalize(G)
-theta = acos(Glocal.z)
-rho = sin(theta/2) / sin(capAngle/2)
-dir = normalize(Glocal.xy)
-imgX = circleCx + rho * circleR * dir.x
-imgY = circleCy - rho * circleR * dir.y
+G = worldDir * globeRadius
 ```
 
-Then normalized texture coordinates are:
+The shader does not need `G` unless future logic needs the physical globe hit position. The fisheye lookup only needs the normalized direction.
+
+Convert the world direction into globe-local coordinates:
 
 ```text
-texU = imgX / imageWidth
-texV = imgY / imageHeight
+globeLocal = inverseGlobalOrientation * worldDir
 ```
 
-## Planned Shader Split
+In the current CPU code this is equivalent to:
 
-The preferred implementation split is:
+```cpp
+const QVector3D globeLocal =
+    m_globeOrientation.conjugated().rotatedVector(worldPoint).normalized();
+```
 
-### Vertex shader
+## Fisheye Mapping Contract
 
-- reconstruct cylinder wall position from `(u, v)` or receive world position directly
-- output world position to the fragment shader
+The shader should match the current CPU mapping used by `sampleProjectionColor(...)` and `sampleProjectionColorNearest(...)`.
 
-### Fragment shader
+Given `globeLocal`:
 
-- compute `G = normalize(P) * globeRadius`
-- convert `G` into globe-local coordinates
-- compute fisheye UV
-- sample the fisheye texture
+```text
+theta = acos(clamp(globeLocal.z, -1, 1))
+```
 
-## Why The Projection Should Be In The Fragment Shader
+Reject or fall back when:
 
-The projection from cylinder wall to globe image is nonlinear.
+```text
+theta > capAngleRadians
+```
 
-If the code computes image UV only at vertices and interpolates them across triangles:
+The current cap angle is:
 
-- the distortion will be wrong
-- the texture will visibly drift or flatten
+```text
+140 degrees
+```
 
-So the correct planned approach is:
+The current radial normalization is:
 
-- keep geometry interpolation in the rasterizer
-- do the projective globe lookup per fragment
+```text
+radiusNormalized = sin(theta / 2) / sin(capAngleRadians / 2)
+```
 
-## Planned Mesh Resolution
+The current image direction is:
 
-Once shader-based sampling is used, the mesh no longer needs to carry color detail.
+```text
+xyLength = length(globeLocal.xy)
 
-A practical starting point is:
+if xyLength is near zero:
+    dir = (0, 0)
+else:
+    dir = globeLocal.xy / xyLength
+```
 
-- azimuth segments: `144`
-- height segments: `32` or `64`
+Convert to image pixel coordinates:
 
-That mesh is for shape continuity only. The texture detail should come from fragment sampling.
+```text
+pixelX = circleCenter.x + radiusNormalized * circleRadius * dir.x
+pixelY = circleCenter.y - radiusNormalized * circleRadius * dir.y
+```
 
-## Planned Uniforms
+Then normalize to texture coordinates:
 
-The shader will likely need:
+```text
+texU = pixelX / imageWidth
+texV = pixelY / imageHeight
+```
 
-- `globeRadius`
-- `xCylinderRadius`
-- `positiveHeight`
-- `negativeHeight`
-- `localFrame` or `xAxis/yAxis/zAxis`
-- `inverseGlobeOrientation`
-- `capAngleRadians`
-- `projectionCircleCenter`
-- `projectionCircleRadius`
-- `projectionImageSize`
-- fisheye texture sampler
+The texture upload must account for Qt image row order. The CPU path uses top-left image pixel coordinates, while OpenGL texture sampling commonly treats `v = 0` as the bottom row unless the upload or shader flips the coordinate.
 
-## Planned CPU Refactor
+## Shader Split
 
-The current CPU-side cylinder path should be changed from:
+### Practical First Step
 
-- centroid color sampling
-- `appendTriangle(...)` with one color per triangle
+Keep the CPU responsible for cylinder mesh generation. Add a dedicated textured-cylinder vertex type that includes world position and fallback color:
 
-to:
+```cpp
+struct TexturedCylinderVertex {
+    QVector3D position;
+    QVector4D fallbackColor;
+};
+```
 
-- generate a cylinder wall mesh with `(u, v)` structure
-- upload vertex positions or cylinder parameters
-- draw with a dedicated textured-cylinder shader path
+The vertex shader should:
 
-This will likely require:
+- transform `position` by `uMvp`
+- pass `position` to the fragment shader as world position
+- pass `fallbackColor` to the fragment shader
 
-- a new vertex type for textured cylinder vertices
-- a dedicated shader program for textured surfaces
-- a `QOpenGLTexture` for the fisheye image instead of only CPU-side `QImage` sampling
+The fragment shader should:
 
-## Expected Result
+- compute `worldDir = normalize(vWorldPosition)`
+- compute `globeLocal`
+- compute fisheye texture coordinates
+- sample the fisheye texture when valid
+- return `fallbackColor` when invalid or when no texture is available
 
-After the refactor:
+This is the lowest-risk migration because the CPU geometry math can stay close to the current implementation.
 
-- the cylinder wall should show a continuous texture
-- the texture should follow the center-projective mapping from globe to cylinder
-- the `y` direction should no longer look like only two patches above and two below
-- the cylinder should visually behave as a true projected surface, not a piecewise flat-colored approximation
+### Later Analytic Variant
+
+A later version can pass only `(u, v)` plus cylinder parameters and reconstruct `P(u,v)` in the vertex shader.
+
+That is a cleaner geometry contract, but it requires more uniform plumbing. It should come after the first shader path is working.
+
+## Required Uniforms
+
+The textured-cylinder shader will need:
+
+```text
+uMvp
+uUseTexture
+uFisheyeTexture
+uInverseGlobeOrientation
+uCapAngleRadians
+uProjectionCircleCenterPx
+uProjectionCircleRadiusPx
+uProjectionImageSizePx
+```
+
+Optional uniforms for future analytic reconstruction:
+
+```text
+uGlobeRadius
+uCylinderRadius
+uPositiveHeight
+uNegativeHeight
+uFrameXAxis
+uFrameYAxis
+uFrameZAxis
+uGlobalCenter
+```
+
+For the first implementation, `uGlobalCenter` can remain implicit as `(0, 0, 0)` because that matches the current globe geometry and CPU sampler.
+
+## Texture Object Requirements
+
+The current renderer keeps the fisheye source as a `QImage` for CPU sampling. The shader path also needs a GPU texture object.
+
+Implementation requirements:
+
+- upload the loaded projection image into a `QOpenGLTexture`
+- refresh the texture whenever `loadProjectionImage(...)` loads a new image
+- keep the CPU `QImage` path during migration for the globe and for comparison
+- decide whether the first shader pass should use nearest filtering or linear filtering
+
+To match the current cylinder behavior and the original nearest-pixel requirement, start with nearest filtering:
+
+```text
+minification filter = nearest
+magnification filter = nearest
+```
+
+Linear filtering can be considered later if the visual goal changes from exact nearest-pixel lookup to smoother texture interpolation.
+
+## Mesh Resolution
+
+The current azimuth segmentation is:
+
+```text
+kPanoramaSegments = 144
+```
+
+That can remain the first shader implementation value.
+
+Because fragment sampling supplies texture detail, the mesh no longer needs to carry color detail. Mesh density is only for geometry shape. A practical starting point is:
+
+```text
+azimuth segments = 144
+height segments  = 2, 8, or 16
+```
+
+Height subdivision is not as important as azimuth subdivision because the cylinder is straight along `frame.yAxis`. More height bands may still help if the shader initially receives interpolated world positions from planar triangles and the visual result needs finer geometric approximation.
+
+## CPU Refactor Steps
+
+1. Add a textured-cylinder shader program separate from the existing color-only program. Done as inactive scaffolding.
+2. Add a textured-cylinder vertex type and buffer setup. Done as inactive scaffolding.
+3. Upload the fisheye `QImage` into a `QOpenGLTexture`. Done as inactive texture upload plumbing.
+4. Split cylinder surface generation from `appendPanoramaBand(...)` into a dedicated mesh builder. Done as `appendXTangentCylinder(...)`.
+5. Keep the existing line traces and hatch overlays in the current color-only line path. Done.
+6. Draw the textured cylinder surface in the surface pass before guide overlays. Done with `kUseTexturedCylinderShader = true`.
+7. Remove triangle-centroid calls to `sampleProjectionColorNearest(...)` from the inactive CPU comparison path once the shader output is visually accepted.
+
+The CPU fallback colors should remain:
+
+```text
+xPositiveCylinderFill
+xNegativeCylinderFill
+```
+
+Use them for:
+
+- no projection image
+- invalid cap sample
+- invalid projection circle
+- temporary shader-disabled debug mode
+
+## Incremental Refactor Log
+
+### Step 1: Extract Current Cylinder Helper
+
+Status: done.
+
+Files:
+
+- `src/PixelToRayWidget.h`
+- `src/PixelToRayWidget.cpp`
+
+Changes:
+
+- Added `appendXTangentCylinder(...)`.
+- Moved the existing x-tangential cylinder surface triangles, nearest-pixel centroid samples, front/rear trace alpha, and hatch lines into that helper.
+- Kept `appendPanoramaBand(...)` as the higher-level coordinator for the x-cylinder and y-axis panorama trace.
+- Added shared `frameCirclePoint(...)` math for local-frame circular points.
+
+Behavior should be unchanged after this step. The cylinder still uses CPU triangle-centroid sampling. This step only separates the current implementation so the shader path can replace the surface drawing in a later step.
+
+Next step:
+
+- Add a textured-cylinder vertex type and shader-program scaffolding without changing the visible output yet.
+
+### Step 2: Add Inactive Textured-Cylinder GL Scaffolding
+
+Status: done.
+
+Files:
+
+- `src/PixelToRayWidget.h`
+- `src/PixelToRayWidget.cpp`
+
+Changes:
+
+- Added `TexturedCylinderVertex` with world `position` and `fallbackColor`.
+- Added a dedicated textured-cylinder shader program, VAO, and VBO.
+- The textured-cylinder vertex shader passes world position and fallback color to the fragment shader.
+- The textured-cylinder fragment shader contains the planned per-fragment fisheye projection math and fallback-color path.
+- The current cylinder draw path still uses the existing CPU-colored `Vertex` path; no visible rendering switch happens in this step.
+
+Next step:
+
+- Upload the fisheye `QImage` into a `QOpenGLTexture` and refresh it when `loadProjectionImage(...)` changes the source image.
+
+### Step 3: Upload Projection Image As GL Texture
+
+Status: done.
+
+Files:
+
+- `src/PixelToRayWidget.h`
+- `src/PixelToRayWidget.cpp`
+
+Changes:
+
+- Added `m_projectionTexture` as a `QOpenGLTexture`.
+- Added `m_projectionTextureDirty` so image load/clear can be requested before an OpenGL context is current.
+- Added `refreshProjectionTexture()` and call it from `ensureGlResources()`.
+- Marked the texture dirty when `loadProjectionImage(...)` replaces the image.
+- Marked the texture dirty when `setFisheyeImagePath(QString())` clears the image.
+- Uploaded the current `QImage` with nearest filtering and clamp-to-edge wrap mode.
+
+The texture is now available for the future textured-cylinder draw path, but the app still renders the cylinder through the current CPU-colored path.
+
+Next step:
+
+- Split cylinder surface mesh creation into textured-cylinder vertices while still drawing the current CPU-colored cylinder for visual parity.
+
+### Step 4: Generate Textured-Cylinder Mesh In Parallel
+
+Status: done.
+
+Files:
+
+- `src/PixelToRayWidget.h`
+- `src/PixelToRayWidget.cpp`
+
+Changes:
+
+- Added `appendTexturedCylinderTriangle(...)`.
+- Added a `texturedCylinderSurfaceVertices` mesh in `paintGL()`.
+- Threaded the textured mesh through `appendPanoramaBand(...)` and `appendXTangentCylinder(...)`.
+- For each existing CPU-colored cylinder triangle, also emit a matching `TexturedCylinderVertex` triangle.
+- The textured mesh uses the positive/negative cylinder fill colors as shader fallback colors.
+- The textured mesh is not drawn yet, so visible output should still match the previous step.
+
+Next step:
+
+- Add a textured-cylinder draw function that can render `texturedCylinderSurfaceVertices` with the shader and texture, then keep it behind a local disabled switch until visual comparison is ready.
+
+### Step 5: Add Disabled Textured-Cylinder Draw Path
+
+Status: done.
+
+Files:
+
+- `src/PixelToRayWidget.h`
+- `src/PixelToRayWidget.cpp`
+
+Changes:
+
+- Added `drawTexturedCylinderVertices(...)`.
+- Added `kUseTexturedCylinderShader = false` as the local switch for the inactive shader path.
+- Wired the surface draw stage so the textured-cylinder path can replace the CPU-colored cylinder path by flipping that switch.
+- Bound the fisheye `QOpenGLTexture` when available.
+- Set shader uniforms for MVP, inverse globe orientation, cap angle, projection circle, and projection image size.
+- Kept the current CPU-colored cylinder draw path active by default.
+
+Next step:
+
+- Temporarily enable the textured path for local visual validation, fix coordinate or texture orientation issues, then decide whether to make it the default.
+
+### Step 6: Enable Textured-Cylinder Shader Path
+
+Status: done.
+
+Files:
+
+- `src/PixelToRayWidget.cpp`
+- `X_TANGENTIAL_CYLINDER_NOTE.md`
+- `IMAGE_TO_GLOBE_MAPPING_NOTE.md`
+- `USER_MANUAL.md`
+
+Changes:
+
+- Set `kUseTexturedCylinderShader = true`.
+- The cylinder surface now draws with `drawTexturedCylinderVertices(...)`.
+- The old CPU-colored cylinder mesh is still generated as a fallback/comparison path, but it is not the active draw path while the switch is true.
+- The line traces, hatch overlays, companion circular trace, and handle overlays still use the existing color-only draw path.
+- Runtime launch for five seconds produced no shader-link or runtime OpenGL warning output beyond the existing Wayland notice.
+
+Follow-up:
+
+- Visual inspection is still needed to confirm texture orientation and projection alignment.
+- If the texture appears vertically flipped, adjust either the image upload orientation or the shader `texV` calculation.
+
+## Files Expected To Change
+
+Likely implementation files:
+
+- `src/PixelToRayWidget.h`
+- `src/PixelToRayWidget.cpp`
+
+Possible supporting documentation updates:
+
+- `X_TANGENTIAL_CYLINDER_NOTE.md`
+- `IMAGE_TO_GLOBE_MAPPING_NOTE.md`
+- `VIEWPORT_DRAW_SEQUENCE_NOTES.md`
+- `USER_MANUAL.md`
+
+## Validation Checklist
+
+The refactor should be considered correct when:
+
+- the cylinder wall no longer shows large flat color patches
+- rotating the global orientation updates the cylinder texture consistently
+- changing latitude, longitude, roll, `positive_z`, `positive_y`, or `negtive_y` updates the projected texture coherently
+- the positive and negative cylinder halves still use the correct fallback colors when needed
+- surface-depth hiding still changes the cylinder depth behavior
+- guide lines and endpoint markers still draw above the cylinder as before
+- no-image startup still renders a usable cylinder
+- the build passes
+
+## Open Decisions
+
+Before implementation, make these choices explicit:
+
+1. Keep nearest filtering for strict parity, or switch to linear filtering for smoother appearance.
+2. Flip the uploaded texture data or flip `texV` in the shader.
+3. Keep one textured-cylinder VBO or reuse the current VBO with a separate vertex format.
+4. Keep the globe on CPU color sampling for now, or plan a later globe shader texture pass.
+5. Keep `140 degrees` hard-coded for parity, or expose the cap angle as a shared renderer setting.
 
 ## Summary
 
-The planned implementation is:
+The refactor should move the cylinder texture lookup from CPU triangle centroids to a dedicated fragment shader.
 
-1. parameterize cylinder wall with `(u, v)`
-2. render a proper cylinder wall mesh
-3. project each fragment back to the globe using the global center
-4. convert the globe hit to fisheye image coordinates
-5. sample the texture in the fragment shader
+The first safe architecture is:
 
-That is the intended next-step architecture for the cylinder mapping.
+1. CPU builds the same cylinder shape.
+2. CPU uploads the fisheye image as a texture.
+3. Vertex shader passes world position to the fragment shader.
+4. Fragment shader projects that world position into the fisheye image.
+5. Fragment shader samples the texture or falls back to the current fill color.
+
+This keeps the current interaction model intact while removing the main source of coarse cylinder texture patches.

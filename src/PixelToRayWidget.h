@@ -16,6 +16,7 @@
 #include <QVector4D>
 #include <QtOpenGL/QOpenGLBuffer>
 #include <QtOpenGL/QOpenGLShaderProgram>
+#include <QtOpenGL/QOpenGLTexture>
 #include <QtOpenGL/QOpenGLVertexArrayObject>
 #include <vector>
 
@@ -48,10 +49,14 @@ public:
     float anchorGlobalZ() const;
     float componentLength(FrameMath::ComponentId id) const;
     QString activeComponentKey() const;
+    bool isRearHemisphereWireframeVisible() const;
+    bool isWorldAxesVisible() const;
+    bool isLocalCoordinateFrameVisible() const;
     bool isGlobalCenterFixed() const;
     bool isPanoramaBandVisible() const;
     bool isXTangentCylinderVisible() const;
     bool isSurfaceDepthHidingEnabled() const;
+    bool isCapClosed() const;
     bool isPerspectiveProjection() const;
     bool isLatitudeLocked() const;
     bool isLongitudeLocked() const;
@@ -65,6 +70,10 @@ public:
     bool isCameraUpXLocked() const;
     bool isCameraUpYLocked() const;
     bool isCameraUpZLocked() const;
+    bool isGlobeOrientationScalarLocked() const;
+    bool isGlobeOrientationXLocked() const;
+    bool isGlobeOrientationYLocked() const;
+    bool isGlobeOrientationZLocked() const;
     bool isComponentLocked(FrameMath::ComponentId id) const;
     void setLatitude(float value);
     void setLongitude(float value);
@@ -83,10 +92,14 @@ public:
     void setCameraUpZ(float value);
     void setGlobeRadiusLocked(bool locked);
     void setComponentLength(FrameMath::ComponentId id, float value);
+    void setRearHemisphereWireframeVisible(bool visible);
+    void setWorldAxesVisible(bool visible);
+    void setLocalCoordinateFrameVisible(bool visible);
     void setGlobalCenterFixed(bool fixed);
     void setPanoramaBandVisible(bool visible);
     void setXTangentCylinderVisible(bool visible);
     void setSurfaceDepthHidingEnabled(bool enabled);
+    void setCapClosed(bool closed);
     void setPerspectiveProjection(bool enabled);
     void setLatitudeLocked(bool locked);
     void setLongitudeLocked(bool locked);
@@ -99,6 +112,10 @@ public:
     void setCameraUpXLocked(bool locked);
     void setCameraUpYLocked(bool locked);
     void setCameraUpZLocked(bool locked);
+    void setGlobeOrientationScalarLocked(bool locked);
+    void setGlobeOrientationXLocked(bool locked);
+    void setGlobeOrientationYLocked(bool locked);
+    void setGlobeOrientationZLocked(bool locked);
     void setComponentLocked(FrameMath::ComponentId id, bool locked);
 
 signals:
@@ -119,6 +136,11 @@ private:
     struct Vertex {
         QVector3D position;
         QVector4D color;
+    };
+
+    struct TexturedCylinderVertex {
+        QVector3D position;
+        QVector4D fallbackColor;
     };
 
     struct ProjectedPoint {
@@ -163,6 +185,10 @@ private:
         bool cameraUpX = false;
         bool cameraUpY = false;
         bool cameraUpZ = false;
+        bool globeOrientationScalar = false;
+        bool globeOrientationX = false;
+        bool globeOrientationY = false;
+        bool globeOrientationZ = false;
         FrameMath::ComponentLengths components{false, false, false, false, false, true};
     };
 
@@ -172,12 +198,15 @@ private:
     QVector3D cameraTarget() const;
     QVector3D cameraPosition() const;
     QVector3D cameraUp() const;
+    QVector3D cameraUpForView() const;
     float effectiveCapPolarAngle() const;
     float minimumVisibleLatitude() const;
     void clampStateToVisibleCap();
     float pixelsPerUnit() const;
+    bool projectedSurfaceBoundsCenterNdc(QVector2D &centerNdc) const;
     void updateViewProjection();
     void ensureGlResources();
+    void refreshProjectionTexture();
     void appendLine(std::vector<Vertex> &vertices,
                     const QVector3D &a,
                     const QVector3D &b,
@@ -185,6 +214,12 @@ private:
                     float alpha = 1.0f,
                     float widthPixels = 0.0f) const;
     void appendTriangle(std::vector<Vertex> &vertices, const QVector3D &a, const QVector3D &b, const QVector3D &c, const QColor &color, float alpha = 1.0f) const;
+    void appendTexturedCylinderTriangle(std::vector<TexturedCylinderVertex> &vertices,
+                                        const QVector3D &a,
+                                        const QVector3D &b,
+                                        const QVector3D &c,
+                                        const QColor &fallbackColor,
+                                        float alpha = 1.0f) const;
     QVector3D screenSpaceOffsetAtPoint(const QVector3D &point, float dxPixels, float dyPixels) const;
     void appendGlobalTerminalMarker(std::vector<Vertex> &lineVertices,
                                     const QVector3D &point,
@@ -203,7 +238,12 @@ private:
                                 std::vector<Vertex> &positivePointVertices,
                                 std::vector<Vertex> &negativePointVertices,
                                 std::vector<Vertex> &centerPointVertices) const;
+    void appendXTangentCylinder(std::vector<Vertex> &cylinderSurfaceVertices,
+                                std::vector<TexturedCylinderVertex> &texturedCylinderSurfaceVertices,
+                                std::vector<Vertex> &lineVertices,
+                                const FrameMath::Frame &frame) const;
     void appendPanoramaBand(std::vector<Vertex> &cylinderSurfaceVertices,
+                            std::vector<TexturedCylinderVertex> &texturedCylinderSurfaceVertices,
                             std::vector<Vertex> &lineVertices) const;
     void appendFrameGeometry(std::vector<Vertex> &lineVertices,
                              std::vector<Vertex> &activeLineVertices,
@@ -214,6 +254,9 @@ private:
                       float pointSize = 1.0f,
                       bool depthWrite = true,
                       bool depthTest = true);
+    void drawTexturedCylinderVertices(const std::vector<TexturedCylinderVertex> &vertices,
+                                      bool depthWrite,
+                                      bool depthTest);
     ProjectedPoint projectPoint(const QVector3D &worldPoint) const;
     QVector2D projectVectorToScreen(const QVector3D &origin, const QVector3D &direction, float length = 1.0f) const;
     HandleVisual handleVisual(FrameMath::ComponentId id) const;
@@ -234,6 +277,7 @@ private:
     void emitStatus();
     void showContextMenu(const QPoint &globalPosition);
     bool isComponentValueLocked(FrameMath::ComponentId id) const;
+    bool isGlobeOrientationLocked() const;
 
     FrameMath::State m_state;
     FrameMath::ComponentLengths m_components;
@@ -249,10 +293,15 @@ private:
     QPointF m_projectionCircleCenter;
     float m_projectionCircleRadius = 0.0f;
     bool m_hasActiveComponent = true;
+    bool m_projectionTextureDirty = true;
     DragState m_drag;
     LockState m_locks;
     QMatrix4x4 m_viewProjection;
     QScopedPointer<QOpenGLShaderProgram> m_program;
+    QScopedPointer<QOpenGLShaderProgram> m_texturedCylinderProgram;
+    QScopedPointer<QOpenGLTexture> m_projectionTexture;
     QOpenGLBuffer m_vertexBuffer{QOpenGLBuffer::VertexBuffer};
+    QOpenGLBuffer m_texturedCylinderVertexBuffer{QOpenGLBuffer::VertexBuffer};
     QOpenGLVertexArrayObject m_vao;
+    QOpenGLVertexArrayObject m_texturedCylinderVao;
 };

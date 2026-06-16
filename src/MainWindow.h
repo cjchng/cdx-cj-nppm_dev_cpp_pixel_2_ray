@@ -6,12 +6,14 @@
 #include <QCheckBox>
 #include <QCloseEvent>
 #include <QDoubleSpinBox>
+#include <QFileSystemWatcher>
 #include <QLabel>
 #include <QMainWindow>
 #include <QPushButton>
 #include <QString>
 
 class PixelToRayWidget;
+class QTimer;
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -32,6 +34,7 @@ private:
         float globeRadius = FrameMath::kSphereRadius;
         QQuaternion globeOrientation{1.0f, 0.0f, 0.0f, 0.0f};
         QString fisheyeImagePath;
+        QString profileComment;
         float perspectiveFovY = 35.0f;
         float cameraEyeOffsetX = 4.0f;
         float cameraEyeOffsetY = 4.0f;
@@ -39,10 +42,14 @@ private:
         float cameraUpX = 0.0f;
         float cameraUpY = 0.0f;
         float cameraUpZ = 1.0f;
+        bool rearHemisphereWireframeVisible = true;
+        bool worldAxesVisible = true;
+        bool localCoordinateFrameVisible = true;
         bool globalCenterFixed = true;
         bool panoramaBandVisible = true;
         bool xTangentCylinderVisible = true;
         bool surfaceDepthHidingEnabled = true;
+        bool capClosed = true;
         bool perspectiveProjection = false;
         float positiveX = 0.5f;
         float negtiveX = 0.3f;
@@ -55,6 +62,10 @@ private:
         bool zoomLocked = false;
         bool capPolarAngleLocked = false;
         bool globeRadiusLocked = true;
+        bool globeOrientationScalarLocked = false;
+        bool globeOrientationXLocked = false;
+        bool globeOrientationYLocked = false;
+        bool globeOrientationZLocked = false;
         bool cameraEyeOffsetXLocked = false;
         bool cameraEyeOffsetYLocked = false;
         bool cameraEyeOffsetZLocked = false;
@@ -74,12 +85,24 @@ private:
     void applyDefaultPanelState();
     void applySavedPanelState();
     void saveStateFiles();
+    void configureStateFileWatcher();
+    void reloadExternalStateFiles();
     void syncInfoPanel();
+    void installUiFontShortcuts();
+    void adjustUiFontScale(double delta);
+    void resetUiFontScale();
+    void applyUiFontScale();
+    void applyUiFontScale(QWidget *widget);
+    bool setShowingCurrentState(bool showCurrent, bool persistRuntimeState);
+    bool readActiveProfileRuntimeState(bool fallbackShowCurrent) const;
+    double readUiFontScaleRuntimeState(double fallbackScale) const;
+    void saveActiveProfileRuntimeState() const;
     PanelState loadPanelStateFromJson(const QString &path, const PanelState &fallback) const;
     void savePanelStateToJson(const QString &path, const PanelState &state) const;
     QString stateProfilesDirectory() const;
     QString defaultStateJsonPath() const;
     QString currentStateJsonPath() const;
+    QString activeProfileRuntimeJsonPath() const;
     QDoubleSpinBox *createSpinBox(double minValue, double maxValue, double step, int decimals);
     QWidget *createLockableEditor(QDoubleSpinBox *spin, QCheckBox **lockCheck);
 
@@ -91,6 +114,7 @@ private:
     QPushButton *m_yTraceButton = nullptr;
     QPushButton *m_xCylinderButton = nullptr;
     QPushButton *m_surfaceDepthButton = nullptr;
+    QPushButton *m_capClosedButton = nullptr;
     QPushButton *m_projectionButton = nullptr;
     QLabel *m_fisheyeImageLabel = nullptr;
     QDoubleSpinBox *m_latitudeSpin = nullptr;
@@ -103,6 +127,14 @@ private:
     QDoubleSpinBox *m_globeOrientationXSpin = nullptr;
     QDoubleSpinBox *m_globeOrientationYSpin = nullptr;
     QDoubleSpinBox *m_globeOrientationZSpin = nullptr;
+    QCheckBox *m_globeOrientationWLock = nullptr;
+    QCheckBox *m_globeOrientationXLock = nullptr;
+    QCheckBox *m_globeOrientationYLock = nullptr;
+    QCheckBox *m_globeOrientationZLock = nullptr;
+    QDoubleSpinBox *m_eulerAxisXSpin = nullptr;
+    QDoubleSpinBox *m_eulerAxisYSpin = nullptr;
+    QDoubleSpinBox *m_eulerAxisZSpin = nullptr;
+    QDoubleSpinBox *m_eulerAngleSpin = nullptr;
     QDoubleSpinBox *m_perspectiveFovYSpin = nullptr;
     QDoubleSpinBox *m_cameraEyeOffsetXSpin = nullptr;
     QDoubleSpinBox *m_cameraEyeOffsetYSpin = nullptr;
@@ -119,6 +151,7 @@ private:
     QDoubleSpinBox *m_positiveXSpin = nullptr;
     QDoubleSpinBox *m_negtiveXSpin = nullptr;
     QDoubleSpinBox *m_positiveYSpin = nullptr;
+    QDoubleSpinBox *m_vaSpin = nullptr;
     QDoubleSpinBox *m_negtiveYSpin = nullptr;
     QDoubleSpinBox *m_positiveZSpin = nullptr;
     QDoubleSpinBox *m_negtiveZSpin = nullptr;
@@ -139,9 +172,15 @@ private:
     QCheckBox *m_positiveYLock = nullptr;
     QCheckBox *m_negtiveYLock = nullptr;
     QCheckBox *m_positiveZLock = nullptr;
+    QFileSystemWatcher *m_stateFileWatcher = nullptr;
+    QWidget *m_controlOverlayPanel = nullptr;
+    QTimer *m_controlOverlayAutoHideTimer = nullptr;
     bool m_syncingInfoPanel = false;
     bool m_loadingSettings = false;
+    bool m_controlOverlayCursorTrackingActive = false;
     PanelState m_defaultStateProfile;
     PanelState m_currentStateSnapshot;
     bool m_showingCurrentState = true;
+    double m_baseUiFontPointSize = 10.0;
+    double m_uiFontScale = 1.0;
 };

@@ -29,7 +29,7 @@ The current startup flow is:
 
 1. create the main window
 2. let the event loop start
-3. resolve the preferred screen
+3. resolve the leftmost available screen
 4. bind the window handle to that screen
 5. call `showFullScreen()`
 

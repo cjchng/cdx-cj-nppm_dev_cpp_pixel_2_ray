@@ -36,11 +36,13 @@ struct State {
     float roll = 0.0f;
     ComponentId active = ComponentId::PositiveX;
     bool showRearWireframe = true;
+    bool showWorldAxes = true;
     bool showLocalFrame = true;
     bool showPanoramaBand = true;
     bool showXTangentCylinder = true;
     bool fixGlobalCenter = true;
     bool hideSurfaceDepth = true;
+    bool capClosed = true;
     bool perspectiveProjection = false;
 };
 

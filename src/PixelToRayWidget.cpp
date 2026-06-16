@@ -30,6 +30,9 @@ constexpr float kActiveContourLineWidth = 3.6f;
 constexpr float kGlobalSpokeLineWidth = 1.4f;
 constexpr float kSurfaceTrackStartThresholdPixels = 4.0f;
 constexpr float kEntaniyaCapAngleDegrees = 140.0f;
+constexpr float kProjectionCenterEpsilon = 1e-6f;
+constexpr float kCameraBasisEpsilon = 1e-6f;
+constexpr bool kUseTexturedCylinderShader = true;
 
 float colorDistanceSquared(const QColor &a, const QColor &b) {
     const float dr = static_cast<float>(a.red() - b.red());
@@ -85,23 +88,29 @@ QString statusText(const FrameMath::State &state, const FrameMath::ComponentLeng
                "roll: %4  [q/e]\n"
                "zoom: %5  [mouse wheel]\n"
                "center: %6  [right click -> Global center (fix/move)]\n"
-               "y trace: %7  [right click -> y-axis great-circle trace]\n"
-               "x cylinder: %8  [right click -> x-axis tangential cylinder]\n"
-               "depth hide: %9  [right click -> surface depth hiding]\n"
-               "projection: %10  [toggle in right panel]\n"
+               "rear wireframe: %7  [right click -> Rear hemisphere wireframe]\n"
+               "world axes: %8  [right click -> World axes]\n"
+               "local frame: %9  [right click -> Local coordinate frame]\n"
+               "y trace: %10  [right click -> y-axis great-circle trace]\n"
+               "x cylinder: %11  [right click -> x-axis tangential cylinder]\n"
+               "depth hide: %12  [right click -> surface depth hiding]\n"
+               "projection: %13  [toggle in right panel]\n"
                "\n"
-                "%11\n"
-                "%12\n"
-                "%13\n"
-                "%14\n"
+               "%14\n"
                "%15\n"
-               "%16")
+               "%16\n"
+               "%17\n"
+               "%18\n"
+               "%19")
         .arg(FrameMath::componentKey(state.active))
         .arg(state.latitude, 0, 'f', 1)
         .arg(state.longitude, 0, 'f', 1)
         .arg(state.roll, 0, 'f', 1)
         .arg(zoom, 0, 'f', 2)
         .arg(state.fixGlobalCenter ? QStringLiteral("fixed") : QStringLiteral("move"))
+        .arg(state.showRearWireframe ? QStringLiteral("on") : QStringLiteral("off"))
+        .arg(state.showWorldAxes ? QStringLiteral("on") : QStringLiteral("off"))
+        .arg(state.showLocalFrame ? QStringLiteral("on") : QStringLiteral("off"))
         .arg(state.showPanoramaBand ? QStringLiteral("on") : QStringLiteral("off"))
         .arg(state.showXTangentCylinder ? QStringLiteral("on") : QStringLiteral("off"))
         .arg(state.hideSurfaceDepth ? QStringLiteral("on") : QStringLiteral("off"))
@@ -116,6 +125,14 @@ QString statusText(const FrameMath::State &state, const FrameMath::ComponentLeng
 
 QVector3D sphericalPoint(float radius, float latitude, float longitude) {
     return FrameMath::latLonToVector(latitude, longitude, radius);
+}
+
+QVector3D frameCirclePoint(const QVector3D &axisA,
+                           const QVector3D &axisB,
+                           float azimuthDeg,
+                           float radius) {
+    const float radians = azimuthDeg * kPi / 180.0f;
+    return (axisA * std::cos(radians) + axisB * std::sin(radians)).normalized() * radius;
 }
 
 void vectorToLatLon(const QVector3D &point, float &latitudeDeg, float &longitudeDeg) {
@@ -148,7 +165,7 @@ PixelToRayWidget::PixelToRayWidget(QWidget *parent)
     m_state.active = normalizedActiveComponent(m_state.active);
 
     const QStringList imageFileNames = {
-        QStringLiteral("circular.png"),
+        QStringLiteral("cj-circular.png"),
         QStringLiteral("Entaniya 280-Facing Up.jpg")
     };
     for (const QString &imageFileName : imageFileNames) {
@@ -170,8 +187,14 @@ PixelToRayWidget::~PixelToRayWidget() {
     if (m_vertexBuffer.isCreated()) {
         m_vertexBuffer.destroy();
     }
+    if (m_texturedCylinderVertexBuffer.isCreated()) {
+        m_texturedCylinderVertexBuffer.destroy();
+    }
     m_vao.destroy();
+    m_texturedCylinderVao.destroy();
+    m_projectionTexture.reset();
     m_program.reset();
+    m_texturedCylinderProgram.reset();
     doneCurrent();
 }
 
@@ -273,6 +296,18 @@ bool PixelToRayWidget::isGlobalCenterFixed() const {
     return m_state.fixGlobalCenter;
 }
 
+bool PixelToRayWidget::isRearHemisphereWireframeVisible() const {
+    return m_state.showRearWireframe;
+}
+
+bool PixelToRayWidget::isWorldAxesVisible() const {
+    return m_state.showWorldAxes;
+}
+
+bool PixelToRayWidget::isLocalCoordinateFrameVisible() const {
+    return m_state.showLocalFrame;
+}
+
 bool PixelToRayWidget::isPanoramaBandVisible() const {
     return m_state.showPanoramaBand;
 }
@@ -283,6 +318,10 @@ bool PixelToRayWidget::isXTangentCylinderVisible() const {
 
 bool PixelToRayWidget::isSurfaceDepthHidingEnabled() const {
     return m_state.hideSurfaceDepth;
+}
+
+bool PixelToRayWidget::isCapClosed() const {
+    return m_state.capClosed;
 }
 
 bool PixelToRayWidget::isPerspectiveProjection() const {
@@ -335,6 +374,22 @@ bool PixelToRayWidget::isCameraUpYLocked() const {
 
 bool PixelToRayWidget::isCameraUpZLocked() const {
     return m_locks.cameraUpZ;
+}
+
+bool PixelToRayWidget::isGlobeOrientationScalarLocked() const {
+    return m_locks.globeOrientationScalar;
+}
+
+bool PixelToRayWidget::isGlobeOrientationXLocked() const {
+    return m_locks.globeOrientationX;
+}
+
+bool PixelToRayWidget::isGlobeOrientationYLocked() const {
+    return m_locks.globeOrientationY;
+}
+
+bool PixelToRayWidget::isGlobeOrientationZLocked() const {
+    return m_locks.globeOrientationZ;
 }
 
 bool PixelToRayWidget::isComponentLocked(FrameMath::ComponentId id) const {
@@ -399,7 +454,19 @@ void PixelToRayWidget::setGlobeRadius(float value) {
 }
 
 void PixelToRayWidget::setGlobeOrientation(const QQuaternion &orientation) {
-    m_globeOrientation = orientation.normalized();
+    QQuaternion next(
+        m_locks.globeOrientationScalar ? m_globeOrientation.scalar() : orientation.scalar(),
+        m_locks.globeOrientationX ? m_globeOrientation.x() : orientation.x(),
+        m_locks.globeOrientationY ? m_globeOrientation.y() : orientation.y(),
+        m_locks.globeOrientationZ ? m_globeOrientation.z() : orientation.z());
+    const float lengthSquared = next.scalar() * next.scalar()
+        + next.x() * next.x()
+        + next.y() * next.y()
+        + next.z() * next.z();
+    if (lengthSquared < 1e-8f) {
+        return;
+    }
+    m_globeOrientation = next.normalized();
     emitStatus();
     update();
 }
@@ -410,6 +477,7 @@ bool PixelToRayWidget::setFisheyeImagePath(const QString &path) {
         m_projectionImagePath.clear();
         m_projectionCircleCenter = QPointF();
         m_projectionCircleRadius = 0.0f;
+        m_projectionTextureDirty = true;
         emitStatus();
         update();
         return true;
@@ -498,6 +566,24 @@ void PixelToRayWidget::setComponentLength(FrameMath::ComponentId id, float value
     update();
 }
 
+void PixelToRayWidget::setRearHemisphereWireframeVisible(bool visible) {
+    m_state.showRearWireframe = visible;
+    emitStatus();
+    update();
+}
+
+void PixelToRayWidget::setWorldAxesVisible(bool visible) {
+    m_state.showWorldAxes = visible;
+    emitStatus();
+    update();
+}
+
+void PixelToRayWidget::setLocalCoordinateFrameVisible(bool visible) {
+    m_state.showLocalFrame = visible;
+    emitStatus();
+    update();
+}
+
 void PixelToRayWidget::setGlobalCenterFixed(bool fixed) {
     m_state.fixGlobalCenter = fixed;
     emitStatus();
@@ -518,6 +604,12 @@ void PixelToRayWidget::setXTangentCylinderVisible(bool visible) {
 
 void PixelToRayWidget::setSurfaceDepthHidingEnabled(bool enabled) {
     m_state.hideSurfaceDepth = enabled;
+    emitStatus();
+    update();
+}
+
+void PixelToRayWidget::setCapClosed(bool closed) {
+    m_state.capClosed = closed;
     emitStatus();
     update();
 }
@@ -583,6 +675,26 @@ void PixelToRayWidget::setCameraUpZLocked(bool locked) {
     emitStatus();
 }
 
+void PixelToRayWidget::setGlobeOrientationScalarLocked(bool locked) {
+    m_locks.globeOrientationScalar = locked;
+    emitStatus();
+}
+
+void PixelToRayWidget::setGlobeOrientationXLocked(bool locked) {
+    m_locks.globeOrientationX = locked;
+    emitStatus();
+}
+
+void PixelToRayWidget::setGlobeOrientationYLocked(bool locked) {
+    m_locks.globeOrientationY = locked;
+    emitStatus();
+}
+
+void PixelToRayWidget::setGlobeOrientationZLocked(bool locked) {
+    m_locks.globeOrientationZ = locked;
+    emitStatus();
+}
+
 void PixelToRayWidget::setComponentLocked(FrameMath::ComponentId id, bool locked) {
     if (isLockedComponent(id)) {
         return;
@@ -622,6 +734,7 @@ void PixelToRayWidget::paintGL() {
 
     std::vector<Vertex> globeSurfaceVertices;
     std::vector<Vertex> cylinderSurfaceVertices;
+    std::vector<TexturedCylinderVertex> texturedCylinderSurfaceVertices;
     std::vector<Vertex> lineVertices;
     std::vector<Vertex> activeLineVertices;
     std::vector<Vertex> pointVertices;
@@ -631,6 +744,7 @@ void PixelToRayWidget::paintGL() {
     std::vector<Vertex> activePointVertices;
     globeSurfaceVertices.reserve(m_projectionImage.isNull() ? 10000 : 120000);
     cylinderSurfaceVertices.reserve(3000);
+    texturedCylinderSurfaceVertices.reserve(3000);
     lineVertices.reserve(12000);
     activeLineVertices.reserve(16);
     pointVertices.reserve(16);
@@ -640,9 +754,11 @@ void PixelToRayWidget::paintGL() {
     activePointVertices.reserve(2);
 
     appendSphereSurface(globeSurfaceVertices);
-    appendPanoramaBand(cylinderSurfaceVertices, lineVertices);
+    appendPanoramaBand(cylinderSurfaceVertices, texturedCylinderSurfaceVertices, lineVertices);
     appendSphereWireframe(lineVertices);
-    appendGlobalAxisTraces(lineVertices, globalPositivePointVertices, globalNegativePointVertices, globalCenterPointVertices);
+    if (m_state.showWorldAxes) {
+        appendGlobalAxisTraces(lineVertices, globalPositivePointVertices, globalNegativePointVertices, globalCenterPointVertices);
+    }
     appendFrameGeometry(lineVertices, activeLineVertices, pointVertices);
 
     if (m_state.showLocalFrame) {
@@ -660,12 +776,18 @@ void PixelToRayWidget::paintGL() {
                  1.0f,
                  m_state.hideSurfaceDepth,
                  m_state.hideSurfaceDepth);
-    drawVertices(GL_TRIANGLES,
-                 cylinderSurfaceVertices,
-                 1.0f,
-                 1.0f,
-                 m_state.hideSurfaceDepth,
-                 m_state.hideSurfaceDepth);
+    if (kUseTexturedCylinderShader) {
+        drawTexturedCylinderVertices(texturedCylinderSurfaceVertices,
+                                     m_state.hideSurfaceDepth,
+                                     m_state.hideSurfaceDepth);
+    } else {
+        drawVertices(GL_TRIANGLES,
+                     cylinderSurfaceVertices,
+                     1.0f,
+                     1.0f,
+                     m_state.hideSurfaceDepth,
+                     m_state.hideSurfaceDepth);
+    }
 
     // Render guides and interactive handles as a deliberate overlay pass.
     drawVertices(GL_TRIANGLES, lineVertices, 1.0f, 1.0f, false, false);
@@ -693,6 +815,11 @@ void PixelToRayWidget::mousePressEvent(QMouseEvent *event) {
     const bool shiftHeld = (event->modifiers() & Qt::ShiftModifier) != 0;
 
     if (shiftHeld) {
+        if (isGlobeOrientationLocked()) {
+            event->ignore();
+            return;
+        }
+
         QVector3D pickedWorldPoint;
         bool preferRearHemisphere = false;
         if (!tryPickGlobalAxisEndpoint(event->position(), pickedWorldPoint, preferRearHemisphere)) {
@@ -890,6 +1017,34 @@ QVector3D PixelToRayWidget::cameraUp() const {
     return m_cameraUpVector.normalized();
 }
 
+QVector3D PixelToRayWidget::cameraUpForView() const {
+    const QVector3D target = cameraTarget();
+    const QVector3D eye = cameraPosition();
+    QVector3D viewForward = target - eye;
+    if (viewForward.lengthSquared() < kCameraBasisEpsilon) {
+        return cameraUp();
+    }
+    viewForward.normalize();
+
+    const QVector3D requestedUp = cameraUp();
+    if (QVector3D::crossProduct(viewForward, requestedUp).lengthSquared() >= kCameraBasisEpsilon) {
+        return requestedUp;
+    }
+
+    const QVector3D fallbackUps[] = {
+        QVector3D(0.0f, 0.0f, 1.0f),
+        QVector3D(0.0f, 1.0f, 0.0f),
+        QVector3D(1.0f, 0.0f, 0.0f)
+    };
+    for (const QVector3D &fallbackUp : fallbackUps) {
+        if (QVector3D::crossProduct(viewForward, fallbackUp).lengthSquared() >= kCameraBasisEpsilon) {
+            return fallbackUp;
+        }
+    }
+
+    return requestedUp;
+}
+
 float PixelToRayWidget::effectiveCapPolarAngle() const {
     return std::min(m_capPolarAngle, 180.0f);
 }
@@ -914,6 +1069,78 @@ float PixelToRayWidget::pixelsPerUnit() const {
     return std::min(width(), height()) / (6.0f * m_zoom);
 }
 
+bool PixelToRayWidget::projectedSurfaceBoundsCenterNdc(QVector2D &centerNdc) const {
+    bool hasBounds = false;
+    float minX = 0.0f;
+    float maxX = 0.0f;
+    float minY = 0.0f;
+    float maxY = 0.0f;
+
+    auto includePoint = [&](const QVector3D &point) {
+        const QVector4D clip = m_viewProjection * QVector4D(point, 1.0f);
+        if (clip.w() <= kProjectionCenterEpsilon) {
+            return;
+        }
+
+        const QVector3D ndc = clip.toVector3DAffine();
+        if (!std::isfinite(ndc.x()) || !std::isfinite(ndc.y())) {
+            return;
+        }
+
+        if (!hasBounds) {
+            minX = maxX = ndc.x();
+            minY = maxY = ndc.y();
+            hasBounds = true;
+            return;
+        }
+
+        minX = std::min(minX, ndc.x());
+        maxX = std::max(maxX, ndc.x());
+        minY = std::min(minY, ndc.y());
+        maxY = std::max(maxY, ndc.y());
+    };
+
+    includePoint(currentSceneCenter());
+    includePoint(QVector3D(0.0f, 0.0f, 0.0f));
+
+    constexpr int kLatitudeSamples = 8;
+    constexpr int kLongitudeSamples = 32;
+    const float minLatitude = minimumVisibleLatitude();
+    for (int lat = 0; lat <= kLatitudeSamples; ++lat) {
+        const float latitude = minLatitude
+            + (90.0f - minLatitude) * static_cast<float>(lat) / static_cast<float>(kLatitudeSamples);
+        for (int lon = 0; lon < kLongitudeSamples; ++lon) {
+            const float longitude = 360.0f * static_cast<float>(lon) / static_cast<float>(kLongitudeSamples);
+            includePoint(m_globeOrientation.rotatedVector(sphericalPoint(m_globeRadius, latitude, longitude)));
+        }
+    }
+
+    if (m_state.showXTangentCylinder) {
+        const FrameMath::Frame frame = currentFrame();
+        const float xCylinderRadius =
+            m_globeRadius + m_components[static_cast<int>(FrameMath::ComponentId::PositiveZ)];
+        const float positiveHeight =
+            m_components[static_cast<int>(FrameMath::ComponentId::PositiveY)] * xCylinderRadius;
+        const float negativeHeight =
+            m_components[static_cast<int>(FrameMath::ComponentId::NegtiveY)] * xCylinderRadius;
+
+        for (int segment = 0; segment < kLongitudeSamples; ++segment) {
+            const float azimuth = 360.0f * static_cast<float>(segment) / static_cast<float>(kLongitudeSamples);
+            const QVector3D base = frameCirclePoint(frame.zAxis, frame.xAxis, azimuth, xCylinderRadius);
+            includePoint(base);
+            includePoint(base + frame.yAxis * positiveHeight);
+            includePoint(base - frame.yAxis * negativeHeight);
+        }
+    }
+
+    if (!hasBounds) {
+        return false;
+    }
+
+    centerNdc = QVector2D(0.5f * (minX + maxX), 0.5f * (minY + maxY));
+    return true;
+}
+
 void PixelToRayWidget::updateViewProjection() {
     const float aspect = height() > 0 ? static_cast<float>(width()) / static_cast<float>(height()) : 1.0f;
     QMatrix4x4 projection;
@@ -925,21 +1152,35 @@ void PixelToRayWidget::updateViewProjection() {
         projection.ortho(-halfWidth, halfWidth, -halfHeight, halfHeight, 0.1f, 100.0f);
     }
 
+    const QVector3D target = cameraTarget();
     QMatrix4x4 view;
-    view.lookAt(cameraPosition(), cameraTarget(), cameraUp());
+    view.lookAt(cameraPosition(), target, cameraUpForView());
     m_viewProjection = projection * view;
-}
 
-// c++
-void PixelToRayWidget::ensureGlResources() {
-    if (m_program) {
-        return;
+    QVector2D projectedCenter;
+    bool hasProjectedCenter = projectedSurfaceBoundsCenterNdc(projectedCenter);
+    if (!hasProjectedCenter) {
+        const QVector4D clipCenter = m_viewProjection * QVector4D(target, 1.0f);
+        if (std::abs(clipCenter.w()) > kProjectionCenterEpsilon) {
+            const QVector3D ndcCenter = clipCenter.toVector3DAffine();
+            projectedCenter = QVector2D(ndcCenter.x(), ndcCenter.y());
+            hasProjectedCenter = true;
+        }
     }
 
-    m_program.reset(new QOpenGLShaderProgram());
+    if (hasProjectedCenter) {
+        QMatrix4x4 screenCenterCorrection;
+        screenCenterCorrection.translate(-projectedCenter.x(), -projectedCenter.y(), 0.0f);
+        m_viewProjection = screenCenterCorrection * m_viewProjection;
+    }
+}
 
-    // Vertex shader: use 'in' without layout qualifiers (GLSL 150)
-    const char *vertexSrc = R"(
+void PixelToRayWidget::ensureGlResources() {
+    if (!m_program) {
+        m_program.reset(new QOpenGLShaderProgram());
+
+        // Vertex shader: use 'in' without layout qualifiers (GLSL 150)
+        const char *vertexSrc = R"(
 #version 150 core
 in vec3 aPosition;
 in vec4 aColor;
@@ -953,8 +1194,8 @@ void main() {
 }
 )";
 
-    // Fragment shader: receives vColor from vertex stage
-    const char *fragmentSrc = R"(
+        // Fragment shader: receives vColor from vertex stage
+        const char *fragmentSrc = R"(
 #version 150 core
 in vec4 vColor;
 uniform bool uRoundPoints;
@@ -970,32 +1211,159 @@ void main() {
 }
 )";
 
-    m_program->addShaderFromSourceCode(QOpenGLShader::Vertex, vertexSrc);
-    m_program->addShaderFromSourceCode(QOpenGLShader::Fragment, fragmentSrc);
+        m_program->addShaderFromSourceCode(QOpenGLShader::Vertex, vertexSrc);
+        m_program->addShaderFromSourceCode(QOpenGLShader::Fragment, fragmentSrc);
 
-    // Bind attribute locations before linking (matches glVertexAttribPointer usage)
-    m_program->bindAttributeLocation("aPosition", 0);
-    m_program->bindAttributeLocation("aColor", 1);
+        // Bind attribute locations before linking (matches glVertexAttribPointer usage)
+        m_program->bindAttributeLocation("aPosition", 0);
+        m_program->bindAttributeLocation("aColor", 1);
 
-    if (!m_program->link()) {
-        qWarning() << "Shader link failed:" << m_program->log();
+        if (!m_program->link()) {
+            qWarning() << "Shader link failed:" << m_program->log();
+            return;
+        }
+
+        m_vao.create();
+        m_vao.bind();
+        m_vertexBuffer.create();
+        m_vertexBuffer.bind();
+        m_vertexBuffer.setUsagePattern(QOpenGLBuffer::DynamicDraw);
+
+        m_program->bind();
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex), reinterpret_cast<void *>(offsetof(Vertex, position)));
+        glEnableVertexAttribArray(1);
+        glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, sizeof(Vertex), reinterpret_cast<void *>(offsetof(Vertex, color)));
+        m_program->release();
+        m_vertexBuffer.release();
+        m_vao.release();
+    }
+
+    if (!m_texturedCylinderProgram) {
+        m_texturedCylinderProgram.reset(new QOpenGLShaderProgram());
+
+        const char *texturedCylinderVertexSrc = R"(
+#version 150 core
+in vec3 aPosition;
+in vec4 aFallbackColor;
+uniform mat4 uMvp;
+out vec3 vWorldPosition;
+out vec4 vFallbackColor;
+void main() {
+    gl_Position = uMvp * vec4(aPosition, 1.0);
+    vWorldPosition = aPosition;
+    vFallbackColor = aFallbackColor;
+}
+)";
+
+        const char *texturedCylinderFragmentSrc = R"(
+#version 150 core
+in vec3 vWorldPosition;
+in vec4 vFallbackColor;
+uniform bool uUseTexture;
+uniform sampler2D uFisheyeTexture;
+uniform mat4 uInverseGlobeOrientation;
+uniform float uCapAngleRadians;
+uniform vec2 uProjectionCircleCenterPx;
+uniform float uProjectionCircleRadiusPx;
+uniform vec2 uProjectionImageSizePx;
+out vec4 fragColor;
+void main() {
+    if (!uUseTexture ||
+        uCapAngleRadians <= 0.0 ||
+        uProjectionCircleRadiusPx <= 1.0 ||
+        uProjectionImageSizePx.x <= 1.0 ||
+        uProjectionImageSizePx.y <= 1.0) {
+        fragColor = vFallbackColor;
         return;
     }
 
-    m_vao.create();
-    m_vao.bind();
-    m_vertexBuffer.create();
-    m_vertexBuffer.bind();
-    m_vertexBuffer.setUsagePattern(QOpenGLBuffer::DynamicDraw);
+    vec3 worldDir = normalize(vWorldPosition);
+    vec3 globeLocal = normalize((uInverseGlobeOrientation * vec4(worldDir, 0.0)).xyz);
+    float theta = acos(clamp(globeLocal.z, -1.0, 1.0));
+    if (theta > uCapAngleRadians) {
+        fragColor = vFallbackColor;
+        return;
+    }
 
-    m_program->bind();
-    glEnableVertexAttribArray(0);
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex), reinterpret_cast<void *>(offsetof(Vertex, position)));
-    glEnableVertexAttribArray(1);
-    glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, sizeof(Vertex), reinterpret_cast<void *>(offsetof(Vertex, color)));
-    m_program->release();
-    m_vertexBuffer.release();
-    m_vao.release();
+    float radiusNormalized = sin(theta * 0.5) / sin(uCapAngleRadians * 0.5);
+    if (radiusNormalized > 1.0) {
+        fragColor = vFallbackColor;
+        return;
+    }
+
+    float xyLength = length(globeLocal.xy);
+    vec2 direction = xyLength > 0.000001 ? globeLocal.xy / xyLength : vec2(0.0, 0.0);
+    vec2 pixel = vec2(
+        uProjectionCircleCenterPx.x + radiusNormalized * uProjectionCircleRadiusPx * direction.x,
+        uProjectionCircleCenterPx.y - radiusNormalized * uProjectionCircleRadiusPx * direction.y
+    );
+    vec2 uv = pixel / uProjectionImageSizePx;
+    if (any(lessThan(uv, vec2(0.0))) || any(greaterThan(uv, vec2(1.0)))) {
+        fragColor = vFallbackColor;
+        return;
+    }
+
+    fragColor = texture(uFisheyeTexture, uv);
+}
+)";
+
+        m_texturedCylinderProgram->addShaderFromSourceCode(QOpenGLShader::Vertex, texturedCylinderVertexSrc);
+        m_texturedCylinderProgram->addShaderFromSourceCode(QOpenGLShader::Fragment, texturedCylinderFragmentSrc);
+        m_texturedCylinderProgram->bindAttributeLocation("aPosition", 0);
+        m_texturedCylinderProgram->bindAttributeLocation("aFallbackColor", 1);
+
+        if (!m_texturedCylinderProgram->link()) {
+            qWarning() << "Textured cylinder shader link failed:" << m_texturedCylinderProgram->log();
+            m_texturedCylinderProgram.reset();
+            return;
+        }
+
+        m_texturedCylinderVao.create();
+        m_texturedCylinderVao.bind();
+        m_texturedCylinderVertexBuffer.create();
+        m_texturedCylinderVertexBuffer.bind();
+        m_texturedCylinderVertexBuffer.setUsagePattern(QOpenGLBuffer::DynamicDraw);
+
+        m_texturedCylinderProgram->bind();
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(0,
+                              3,
+                              GL_FLOAT,
+                              GL_FALSE,
+                              sizeof(TexturedCylinderVertex),
+                              reinterpret_cast<void *>(offsetof(TexturedCylinderVertex, position)));
+        glEnableVertexAttribArray(1);
+        glVertexAttribPointer(1,
+                              4,
+                              GL_FLOAT,
+                              GL_FALSE,
+                              sizeof(TexturedCylinderVertex),
+                              reinterpret_cast<void *>(offsetof(TexturedCylinderVertex, fallbackColor)));
+        m_texturedCylinderProgram->release();
+        m_texturedCylinderVertexBuffer.release();
+        m_texturedCylinderVao.release();
+    }
+
+    refreshProjectionTexture();
+}
+
+void PixelToRayWidget::refreshProjectionTexture() {
+    if (!m_projectionTextureDirty) {
+        return;
+    }
+
+    m_projectionTextureDirty = false;
+    m_projectionTexture.reset();
+    if (m_projectionImage.isNull()) {
+        return;
+    }
+
+    m_projectionTexture.reset(new QOpenGLTexture(QOpenGLTexture::Target2D));
+    m_projectionTexture->setMinificationFilter(QOpenGLTexture::Nearest);
+    m_projectionTexture->setMagnificationFilter(QOpenGLTexture::Nearest);
+    m_projectionTexture->setWrapMode(QOpenGLTexture::ClampToEdge);
+    m_projectionTexture->setData(m_projectionImage);
 }
 
 void PixelToRayWidget::appendLine(std::vector<Vertex> &vertices,
@@ -1013,7 +1381,7 @@ void PixelToRayWidget::appendLine(std::vector<Vertex> &vertices,
     }
 
     QVector3D viewForward = (cameraTarget() - cameraPosition()).normalized();
-    QVector3D worldUp = cameraUp();
+    QVector3D worldUp = cameraUpForView();
     QVector3D cameraRight = QVector3D::crossProduct(viewForward, worldUp).normalized();
     if (cameraRight.lengthSquared() < 1e-6f) {
         worldUp = QVector3D(0.0f, 1.0f, 0.0f);
@@ -1056,9 +1424,21 @@ void PixelToRayWidget::appendTriangle(std::vector<Vertex> &vertices, const QVect
     vertices.push_back({c, rgba});
 }
 
+void PixelToRayWidget::appendTexturedCylinderTriangle(std::vector<TexturedCylinderVertex> &vertices,
+                                                      const QVector3D &a,
+                                                      const QVector3D &b,
+                                                      const QVector3D &c,
+                                                      const QColor &fallbackColor,
+                                                      float alpha) const {
+    const QVector4D rgba(fallbackColor.redF(), fallbackColor.greenF(), fallbackColor.blueF(), alpha);
+    vertices.push_back({a, rgba});
+    vertices.push_back({b, rgba});
+    vertices.push_back({c, rgba});
+}
+
 QVector3D PixelToRayWidget::screenSpaceOffsetAtPoint(const QVector3D &point, float dxPixels, float dyPixels) const {
     QVector3D viewForward = (cameraTarget() - cameraPosition()).normalized();
-    QVector3D worldUp = cameraUp();
+    QVector3D worldUp = cameraUpForView();
     QVector3D cameraRight = QVector3D::crossProduct(viewForward, worldUp).normalized();
     if (cameraRight.lengthSquared() < 1e-6f) {
         worldUp = QVector3D(0.0f, 1.0f, 0.0f);
@@ -1138,6 +1518,7 @@ bool PixelToRayWidget::loadProjectionImage(const QString &path) {
     }
     m_projectionImage = image.convertToFormat(QImage::Format_RGBA8888);
     m_projectionImagePath = QFileInfo(path).absoluteFilePath();
+    m_projectionTextureDirty = true;
     detectProjectionCircle();
     return true;
 }
@@ -1404,7 +1785,7 @@ void PixelToRayWidget::appendSphereSurface(std::vector<Vertex> &vertices) const 
         }
     }
 
-    if (minLatitude > -89.9f) {
+    if (m_state.capClosed && minLatitude > -89.9f) {
         const QVector3D capCenterLocal(0.0f, 0.0f, m_globeRadius * std::sin(qDegreesToRadians(minLatitude)));
         const QVector3D capCenter = m_globeOrientation.rotatedVector(capCenterLocal);
         QVector3D previous = m_globeOrientation.rotatedVector(sphericalPoint(m_globeRadius, minLatitude, 0.0f));
@@ -1549,9 +1930,9 @@ void PixelToRayWidget::appendGlobalAxisTraces(std::vector<Vertex> &lineVertices,
     };
 
     // Globe-axis naming:
-    // i_r_a = IdealRowAxis = global X axis
-    // i_o_a = IdealOpticalAxis = global Y axis
-    // i_c_a = IdealColumnAxis = global Z axis
+    // i_r_a = IdealRowAxis = globe X axis
+    // i_o_a = IdealOpticalAxis = globe Y axis
+    // i_c_a = IdealColumnAxis = globe Z axis
     const QColor globalXColor = globalTraceColor('x');
     const QColor globalYColor = globalTraceColor('y');
     const QColor globalZColor = globalTraceColor('z');
@@ -1567,10 +1948,10 @@ void PixelToRayWidget::appendGlobalAxisTraces(std::vector<Vertex> &lineVertices,
     const QVector3D positiveZEnd = m_globeOrientation.rotatedVector(ifnp + zAxis * m_globeRadius);
     const QVector3D negativeZEnd = m_globeOrientation.rotatedVector(ifnp - zAxis * m_globeRadius);
 
-    // Global-axis naming:
-    // i_r_a = IdealRowAxis = global X axis
-    // i_o_a = IdealOpticalAxis = global Y axis
-    // i_c_a = IdealColumnAxis = global Z axis
+    // Globe-axis naming. Existing variable names still use "global" as a legacy term.
+    // i_r_a = IdealRowAxis = globe X axis
+    // i_o_a = IdealOpticalAxis = globe Y axis
+    // i_c_a = IdealColumnAxis = globe Z axis
     appendDashedSpoke(positiveXEnd, globalXColor, 0.98f);
     appendDashedSpoke(negativeXEnd, globalXColor, 0.68f);
     appendDashedSpoke(positiveYEnd, globalYColor, 0.98f);
@@ -1594,7 +1975,109 @@ void PixelToRayWidget::appendGlobalAxisTraces(std::vector<Vertex> &lineVertices,
     centerPointVertices.push_back({ifnp, QVector4D(1.0f, 1.0f, 1.0f, 1.0f)});
 }
 
+void PixelToRayWidget::appendXTangentCylinder(std::vector<Vertex> &cylinderSurfaceVertices,
+                                              std::vector<TexturedCylinderVertex> &texturedCylinderSurfaceVertices,
+                                              std::vector<Vertex> &lineVertices,
+                                              const FrameMath::Frame &frame) const {
+    const QColor xPositiveTraceColor(0xff, 0xd1, 0x66);
+    const QColor xNegativeTraceColor(0x7e, 0xc8, 0xff);
+    const QColor xPositiveCylinderFill(0xe6, 0x8a, 0x2e);
+    const QColor xNegativeCylinderFill(0x2f, 0x8f, 0xd9);
+
+    const float xCylinderRadius =
+        m_globeRadius + m_components[static_cast<int>(FrameMath::ComponentId::PositiveZ)];
+    const float positiveY = m_components[static_cast<int>(FrameMath::ComponentId::PositiveY)];
+    const float negativeY = m_components[static_cast<int>(FrameMath::ComponentId::NegtiveY)];
+    //const float positiveHeight = std::sqrt(xCylinderRadius * xCylinderRadius + positiveY * positiveY);
+    //const float negativeHeight = std::sqrt(xCylinderRadius * xCylinderRadius + negativeY * negativeY);
+    const float positiveHeight =  positiveY * xCylinderRadius;
+    const float negativeHeight = negativeY  * xCylinderRadius;
+
+    const QVector3D camera = cameraPosition();
+    for (int segment = 0; segment < kPanoramaSegments; ++segment) {
+        const float azimuth0 = 360.0f * static_cast<float>(segment) / static_cast<float>(kPanoramaSegments);
+        const float azimuth1 = 360.0f * static_cast<float>(segment + 1) / static_cast<float>(kPanoramaSegments);
+
+        const QVector3D base0 = frameCirclePoint(frame.zAxis, frame.xAxis, azimuth0, xCylinderRadius);
+        const QVector3D base1 = frameCirclePoint(frame.zAxis, frame.xAxis, azimuth1, xCylinderRadius);
+        const QVector3D top0 = base0 + frame.yAxis * positiveHeight;
+        const QVector3D top1 = base1 + frame.yAxis * positiveHeight;
+        const QVector3D bottom0 = base0 - frame.yAxis * negativeHeight;
+        const QVector3D bottom1 = base1 - frame.yAxis * negativeHeight;
+        const QVector3D radialMid = ((base0 + base1) * 0.5f).normalized();
+        const QVector3D segmentMid = (base0 + base1 + top0 + top1) * 0.25f;
+        const bool isFrontFacing = QVector3D::dotProduct(radialMid, (camera - segmentMid).normalized()) >= 0.0f;
+        const bool xrayCylinder = !m_state.hideSurfaceDepth;
+        const float positiveFillAlpha = 1.0f;
+        const float negativeFillAlpha = 1.0f;
+        const float traceAlpha = isFrontFacing ? 0.78f : (xrayCylinder ? 0.48f : 0.30f);
+        const float hatchAlpha = xrayCylinder ? 0.42f : 0.24f;
+
+        const QColor positiveSampleA = sampleProjectionColorNearest((base0 + base1 + top1) / 3.0f);
+        const QColor positiveSampleB = sampleProjectionColorNearest((base0 + top1 + top0) / 3.0f);
+        const QColor negativeSampleA = sampleProjectionColorNearest((bottom0 + bottom1 + base1) / 3.0f);
+        const QColor negativeSampleB = sampleProjectionColorNearest((bottom0 + base1 + base0) / 3.0f);
+
+        appendTriangle(cylinderSurfaceVertices,
+                       base0,
+                       base1,
+                       top1,
+                       positiveSampleA.isValid() ? positiveSampleA : xPositiveCylinderFill,
+                       positiveFillAlpha);
+        appendTexturedCylinderTriangle(texturedCylinderSurfaceVertices,
+                                       base0,
+                                       base1,
+                                       top1,
+                                       xPositiveCylinderFill,
+                                       positiveFillAlpha);
+        appendTriangle(cylinderSurfaceVertices,
+                       base0,
+                       top1,
+                       top0,
+                       positiveSampleB.isValid() ? positiveSampleB : xPositiveCylinderFill,
+                       positiveFillAlpha);
+        appendTexturedCylinderTriangle(texturedCylinderSurfaceVertices,
+                                       base0,
+                                       top1,
+                                       top0,
+                                       xPositiveCylinderFill,
+                                       positiveFillAlpha);
+        appendTriangle(cylinderSurfaceVertices,
+                       bottom0,
+                       bottom1,
+                       base1,
+                       negativeSampleA.isValid() ? negativeSampleA : xNegativeCylinderFill,
+                       negativeFillAlpha);
+        appendTexturedCylinderTriangle(texturedCylinderSurfaceVertices,
+                                       bottom0,
+                                       bottom1,
+                                       base1,
+                                       xNegativeCylinderFill,
+                                       negativeFillAlpha);
+        appendTriangle(cylinderSurfaceVertices,
+                       bottom0,
+                       base1,
+                       base0,
+                       negativeSampleB.isValid() ? negativeSampleB : xNegativeCylinderFill,
+                       negativeFillAlpha);
+        appendTexturedCylinderTriangle(texturedCylinderSurfaceVertices,
+                                       bottom0,
+                                       base1,
+                                       base0,
+                                       xNegativeCylinderFill,
+                                       negativeFillAlpha);
+        appendLine(lineVertices, top0, top1, xPositiveTraceColor, traceAlpha);
+        appendLine(lineVertices, bottom0, bottom1, xNegativeTraceColor, traceAlpha);
+
+        if (!isFrontFacing && (segment % 2) == 0) {
+            appendLine(lineVertices, base0, top1, xPositiveTraceColor, hatchAlpha);
+            appendLine(lineVertices, bottom0, base1, xNegativeTraceColor, hatchAlpha);
+        }
+    }
+}
+
 void PixelToRayWidget::appendPanoramaBand(std::vector<Vertex> &cylinderSurfaceVertices,
+                                          std::vector<TexturedCylinderVertex> &texturedCylinderSurfaceVertices,
                                           std::vector<Vertex> &lineVertices) const {
     if (!m_state.showPanoramaBand && !m_state.showXTangentCylinder) {
         return;
@@ -1602,21 +2085,13 @@ void PixelToRayWidget::appendPanoramaBand(std::vector<Vertex> &cylinderSurfaceVe
 
     const FrameMath::Frame frame = currentFrame();
     const QColor xPositiveTraceColor(0xff, 0xd1, 0x66);
-    const QColor xNegativeTraceColor(0x7e, 0xc8, 0xff);
     const QColor yTraceColor(0x72, 0xf1, 0xb8);
-    const QColor xPositiveCylinderFill(0xe6, 0x8a, 0x2e);
-    const QColor xNegativeCylinderFill(0x2f, 0x8f, 0xd9);
-
-    auto circlePoint = [&](const QVector3D &axisA, const QVector3D &axisB, float azimuthDeg, float radius) {
-        const float radians = azimuthDeg * kPi / 180.0f;
-        return (axisA * std::cos(radians) + axisB * std::sin(radians)).normalized() * radius;
-    };
 
     auto appendGreatCircleTrace = [&](const QVector3D &axisA, const QVector3D &axisB, const QColor &color, float radius) {
-        QVector3D previous = circlePoint(axisA, axisB, 0.0f, radius);
+        QVector3D previous = frameCirclePoint(axisA, axisB, 0.0f, radius);
         for (int segment = 1; segment <= kPanoramaSegments; ++segment) {
             const float azimuth = 360.0f * static_cast<float>(segment) / static_cast<float>(kPanoramaSegments);
-            const QVector3D current = circlePoint(axisA, axisB, azimuth, radius);
+            const QVector3D current = frameCirclePoint(axisA, axisB, azimuth, radius);
             appendLine(lineVertices, previous, current, color, 0.95f);
             previous = current;
         }
@@ -1625,71 +2100,7 @@ void PixelToRayWidget::appendPanoramaBand(std::vector<Vertex> &cylinderSurfaceVe
     if (m_state.showXTangentCylinder) {
         const float xCylinderRadius =
             m_globeRadius + m_components[static_cast<int>(FrameMath::ComponentId::PositiveZ)];
-        const float positiveY = m_components[static_cast<int>(FrameMath::ComponentId::PositiveY)];
-        const float negativeY = m_components[static_cast<int>(FrameMath::ComponentId::NegtiveY)];
-        //const float positiveHeight = std::sqrt(xCylinderRadius * xCylinderRadius + positiveY * positiveY);
-        //const float negativeHeight = std::sqrt(xCylinderRadius * xCylinderRadius + negativeY * negativeY);
-        const float positiveHeight =  positiveY * xCylinderRadius;
-        const float negativeHeight = negativeY  * xCylinderRadius;
-
-        const QVector3D camera = cameraPosition();
-        for (int segment = 0; segment < kPanoramaSegments; ++segment) {
-            const float azimuth0 = 360.0f * static_cast<float>(segment) / static_cast<float>(kPanoramaSegments);
-            const float azimuth1 = 360.0f * static_cast<float>(segment + 1) / static_cast<float>(kPanoramaSegments);
-
-            const QVector3D base0 = circlePoint(frame.zAxis, frame.xAxis, azimuth0, xCylinderRadius);
-            const QVector3D base1 = circlePoint(frame.zAxis, frame.xAxis, azimuth1, xCylinderRadius);
-            const QVector3D top0 = base0 + frame.yAxis * positiveHeight;
-            const QVector3D top1 = base1 + frame.yAxis * positiveHeight;
-            const QVector3D bottom0 = base0 - frame.yAxis * negativeHeight;
-            const QVector3D bottom1 = base1 - frame.yAxis * negativeHeight;
-            const QVector3D radialMid = ((base0 + base1) * 0.5f).normalized();
-            const QVector3D segmentMid = (base0 + base1 + top0 + top1) * 0.25f;
-            const bool isFrontFacing = QVector3D::dotProduct(radialMid, (camera - segmentMid).normalized()) >= 0.0f;
-            const bool xrayCylinder = !m_state.hideSurfaceDepth;
-            const float positiveFillAlpha = 1.0f;
-            const float negativeFillAlpha = 1.0f;
-            const float traceAlpha = isFrontFacing ? 0.78f : (xrayCylinder ? 0.48f : 0.30f);
-            const float hatchAlpha = xrayCylinder ? 0.42f : 0.24f;
-
-            const QColor positiveSampleA = sampleProjectionColorNearest((base0 + base1 + top1) / 3.0f);
-            const QColor positiveSampleB = sampleProjectionColorNearest((base0 + top1 + top0) / 3.0f);
-            const QColor negativeSampleA = sampleProjectionColorNearest((bottom0 + bottom1 + base1) / 3.0f);
-            const QColor negativeSampleB = sampleProjectionColorNearest((bottom0 + base1 + base0) / 3.0f);
-
-            appendTriangle(cylinderSurfaceVertices,
-                           base0,
-                           base1,
-                           top1,
-                           positiveSampleA.isValid() ? positiveSampleA : xPositiveCylinderFill,
-                           positiveFillAlpha);
-            appendTriangle(cylinderSurfaceVertices,
-                           base0,
-                           top1,
-                           top0,
-                           positiveSampleB.isValid() ? positiveSampleB : xPositiveCylinderFill,
-                           positiveFillAlpha);
-            appendTriangle(cylinderSurfaceVertices,
-                           bottom0,
-                           bottom1,
-                           base1,
-                           negativeSampleA.isValid() ? negativeSampleA : xNegativeCylinderFill,
-                           negativeFillAlpha);
-            appendTriangle(cylinderSurfaceVertices,
-                           bottom0,
-                           base1,
-                           base0,
-                           negativeSampleB.isValid() ? negativeSampleB : xNegativeCylinderFill,
-                           negativeFillAlpha);
-            appendLine(lineVertices, top0, top1, xPositiveTraceColor, traceAlpha);
-            appendLine(lineVertices, bottom0, bottom1, xNegativeTraceColor, traceAlpha);
-
-            if (!isFrontFacing && (segment % 2) == 0) {
-                appendLine(lineVertices, base0, top1, xPositiveTraceColor, hatchAlpha);
-                appendLine(lineVertices, bottom0, base1, xNegativeTraceColor, hatchAlpha);
-            }
-        }
-
+        appendXTangentCylinder(cylinderSurfaceVertices, texturedCylinderSurfaceVertices, lineVertices, frame);
         appendGreatCircleTrace(frame.zAxis, frame.xAxis, xPositiveTraceColor, xCylinderRadius);
     }
 
@@ -1701,16 +2112,15 @@ void PixelToRayWidget::appendPanoramaBand(std::vector<Vertex> &cylinderSurfaceVe
 void PixelToRayWidget::appendFrameGeometry(std::vector<Vertex> &lineVertices,
                                            std::vector<Vertex> &activeLineVertices,
                                            std::vector<Vertex> &pointVertices) const {
+    if (!m_state.showLocalFrame) {
+        return;
+    }
+
     const QVector3D origin = currentOrigin();
     const FrameMath::Frame frame = currentFrame();
 
     if (m_state.fixGlobalCenter) {
         appendLine(lineVertices, currentSceneCenter(), origin, QColor(0xff, 0xff, 0xff), 0.15f);
-    }
-
-    if (!m_state.showLocalFrame) {
-        appendLocalOriginMarker(lineVertices, pointVertices, origin);
-        return;
     }
 
     appendLine(lineVertices, origin, origin + frame.xAxis * FrameMath::kFrameVisualLength, FrameMath::axisColor('x'), 1.0f);
@@ -1778,6 +2188,65 @@ void PixelToRayWidget::drawVertices(GLenum mode,
     m_program->release();
     m_vertexBuffer.release();
     m_vao.release();
+}
+
+void PixelToRayWidget::drawTexturedCylinderVertices(const std::vector<TexturedCylinderVertex> &vertices,
+                                                    bool depthWrite,
+                                                    bool depthTest) {
+    if (vertices.empty()) {
+        return;
+    }
+
+    ensureGlResources();
+    if (!m_texturedCylinderProgram || !m_texturedCylinderVao.isCreated() || !m_texturedCylinderVertexBuffer.isCreated()) {
+        return;
+    }
+
+    const bool useTexture =
+        m_projectionTexture && m_projectionTexture->isCreated() && !m_projectionImage.isNull();
+
+    m_texturedCylinderVao.bind();
+    m_texturedCylinderVertexBuffer.bind();
+    m_texturedCylinderVertexBuffer.allocate(vertices.data(),
+                                            static_cast<int>(vertices.size() * sizeof(TexturedCylinderVertex)));
+    m_texturedCylinderProgram->bind();
+    m_texturedCylinderProgram->setUniformValue("uMvp", m_viewProjection);
+    m_texturedCylinderProgram->setUniformValue("uUseTexture", useTexture);
+
+    QMatrix4x4 inverseGlobeOrientation;
+    inverseGlobeOrientation.rotate(m_globeOrientation.conjugated());
+    m_texturedCylinderProgram->setUniformValue("uInverseGlobeOrientation", inverseGlobeOrientation);
+    m_texturedCylinderProgram->setUniformValue("uCapAngleRadians", qDegreesToRadians(kEntaniyaCapAngleDegrees));
+    m_texturedCylinderProgram->setUniformValue("uProjectionCircleCenterPx",
+                                               QVector2D(static_cast<float>(m_projectionCircleCenter.x()),
+                                                         static_cast<float>(m_projectionCircleCenter.y())));
+    m_texturedCylinderProgram->setUniformValue("uProjectionCircleRadiusPx", m_projectionCircleRadius);
+    m_texturedCylinderProgram->setUniformValue("uProjectionImageSizePx",
+                                               QVector2D(static_cast<float>(m_projectionImage.width()),
+                                                         static_cast<float>(m_projectionImage.height())));
+
+    if (useTexture) {
+        m_texturedCylinderProgram->setUniformValue("uFisheyeTexture", 0);
+        m_projectionTexture->bind(0);
+    }
+
+    if (depthTest) {
+        glEnable(GL_DEPTH_TEST);
+    } else {
+        glDisable(GL_DEPTH_TEST);
+    }
+
+    glDepthMask(depthWrite ? GL_TRUE : GL_FALSE);
+    glDrawArrays(GL_TRIANGLES, 0, static_cast<GLsizei>(vertices.size()));
+    glDepthMask(GL_TRUE);
+    glEnable(GL_DEPTH_TEST);
+
+    if (useTexture) {
+        m_projectionTexture->release();
+    }
+    m_texturedCylinderProgram->release();
+    m_texturedCylinderVertexBuffer.release();
+    m_texturedCylinderVao.release();
 }
 
 PixelToRayWidget::ProjectedPoint PixelToRayWidget::projectPoint(const QVector3D &worldPoint) const {
@@ -1879,6 +2348,10 @@ bool PixelToRayWidget::tryMapScreenToSphere(const QPointF &position,
 bool PixelToRayWidget::tryPickGlobalAxisEndpoint(const QPointF &position,
                                                  QVector3D &pickedWorldPoint,
                                                  bool &preferRearHemisphere) const {
+    if (!m_state.showWorldAxes) {
+        return false;
+    }
+
     const_cast<PixelToRayWidget *>(this)->updateViewProjection();
     const QVector3D center = currentSceneCenter();
     const QVector3D cameraDir = (cameraPosition() - center).normalized();
@@ -1970,6 +2443,10 @@ void PixelToRayWidget::updateSurfaceTracking(const QPointF &position, bool prefe
 }
 
 void PixelToRayWidget::updateGlobalAxisTracking(const QPointF &position) {
+    if (isGlobeOrientationLocked()) {
+        return;
+    }
+
     QVector3D spherePoint;
     if (!tryMapScreenToSphere(position, m_drag.preferRearHemisphere, false, spherePoint)) {
         return;
@@ -1997,6 +2474,10 @@ void PixelToRayWidget::showContextMenu(const QPoint &globalPosition) {
     rearAction->setCheckable(true);
     rearAction->setChecked(m_state.showRearWireframe);
 
+    QAction *worldAxesAction = menu.addAction(tr("World axes"));
+    worldAxesAction->setCheckable(true);
+    worldAxesAction->setChecked(m_state.showWorldAxes);
+
     QAction *frameAction = menu.addAction(tr("Local coordinate frame"));
     frameAction->setCheckable(true);
     frameAction->setChecked(m_state.showLocalFrame);
@@ -2013,6 +2494,10 @@ void PixelToRayWidget::showContextMenu(const QPoint &globalPosition) {
     depthHidingAction->setCheckable(true);
     depthHidingAction->setChecked(m_state.hideSurfaceDepth);
 
+    QAction *capClosedAction = menu.addAction(tr("Cap Closed"));
+    capClosedAction->setCheckable(true);
+    capClosedAction->setChecked(m_state.capClosed);
+
     QAction *centerAction = menu.addAction(tr("Global center (fix/move)"));
     centerAction->setCheckable(true);
     centerAction->setChecked(m_state.fixGlobalCenter);
@@ -2020,6 +2505,8 @@ void PixelToRayWidget::showContextMenu(const QPoint &globalPosition) {
     QAction *chosen = menu.exec(globalPosition);
     if (chosen == rearAction) {
         m_state.showRearWireframe = rearAction->isChecked();
+    } else if (chosen == worldAxesAction) {
+        m_state.showWorldAxes = worldAxesAction->isChecked();
     } else if (chosen == frameAction) {
         m_state.showLocalFrame = frameAction->isChecked();
     } else if (chosen == panoramaAction) {
@@ -2028,6 +2515,8 @@ void PixelToRayWidget::showContextMenu(const QPoint &globalPosition) {
         m_state.showXTangentCylinder = xCylinderAction->isChecked();
     } else if (chosen == depthHidingAction) {
         m_state.hideSurfaceDepth = depthHidingAction->isChecked();
+    } else if (chosen == capClosedAction) {
+        m_state.capClosed = capClosedAction->isChecked();
     } else if (chosen == centerAction) {
         m_state.fixGlobalCenter = centerAction->isChecked();
     }
@@ -2038,6 +2527,13 @@ void PixelToRayWidget::showContextMenu(const QPoint &globalPosition) {
 
 bool PixelToRayWidget::isComponentValueLocked(FrameMath::ComponentId id) const {
     return m_locks.components[static_cast<int>(id)];
+}
+
+bool PixelToRayWidget::isGlobeOrientationLocked() const {
+    return m_locks.globeOrientationScalar
+        || m_locks.globeOrientationX
+        || m_locks.globeOrientationY
+        || m_locks.globeOrientationZ;
 }
 /* Example usage:
    QVector3D pos = sphericalToCartesian(20.0f, 35.0f, 1.0f);

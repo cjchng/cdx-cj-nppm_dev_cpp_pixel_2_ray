@@ -10,8 +10,9 @@ This note describes how that cylinder is constructed in the current implementati
 
 The cylinder is generated in:
 
-- [src/PixelToRayWidget.cpp](/Users/cj/Documents/cdx-cj-nppm_dev_cpp_pixel_2_ray/src/PixelToRayWidget.cpp)
-  - `appendPanoramaBand(...)`
+- [src/PixelToRayWidget.cpp](/home/cj/Documents/cdx-cj-nppm_dev_cpp_pixel_2_ray/src/PixelToRayWidget.cpp)
+  - `appendPanoramaBand(...)` coordinates the panorama/cylinder overlays
+  - `appendXTangentCylinder(...)` builds the x-tangential cylinder surface and line overlays
 
 The cylinder is only built when:
 
@@ -110,25 +111,23 @@ negativeFillAlpha = 1.0f
 
 ### Surface Texture Mapping
 
-The cylinder wall is now textured indirectly from the globe fisheye image.
+The cylinder wall is now textured by the dedicated textured-cylinder shader path.
 
 The method is:
 
-1. take each wall triangle
-2. compute its triangle centroid
-3. interpret that centroid direction relative to the globe
-4. inverse-map that direction into the fisheye image
-5. sample the image with nearest-pixel lookup
-6. use that sampled color as the triangle fill color
-
-In code this is done with:
-
-- `sampleProjectionColorNearest(...)`
+1. build cylinder wall triangles as world-space vertices
+2. pass each fragment's interpolated world position to the fragment shader
+3. normalize that position as a direction from the global center
+4. rotate that direction into globe-local coordinates
+5. map the globe-local direction into the detected fisheye circle
+6. sample the uploaded fisheye `QOpenGLTexture`
 
 If a valid fisheye sample is not available, the renderer falls back to the cylinder fill colors:
 
 - `xPositiveCylinderFill`
 - `xNegativeCylinderFill`
+
+The previous CPU centroid sampler, `sampleProjectionColorNearest(...)`, is still present for fallback/comparison work but is no longer the active cylinder surface draw path while `kUseTexturedCylinderShader` is enabled.
 
 ### Rear/Front Styling
 

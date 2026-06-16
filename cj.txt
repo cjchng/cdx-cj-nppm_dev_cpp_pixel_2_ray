@@ -61,3 +61,6 @@
 
 
 To continue this session, run codex resume 019e40a0-b130-73d2-bfa3-9af26e666485
+
+Please add [Local Components] a row,named [va], to equate [positive_y] in term of the angle
+  constructed with local_z axis taking global center as the intesection

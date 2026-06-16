@@ -2,6 +2,8 @@
 
 #include "PixelToRayWidget.h"
 
+#include <QActionGroup>
+#include <QApplication>
 #include <QCoreApplication>
 #include <QCursor>
 #include <QDir>
@@ -11,79 +13,288 @@
 #include <QFontDatabase>
 #include <QFormLayout>
 #include <QGuiApplication>
+#include <QGridLayout>
 #include <QHBoxLayout>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QKeySequence>
 #include <QMenuBar>
 #include <QPalette>
 #include <QScreen>
+#include <QShortcut>
 #include <QSignalBlocker>
 #include <QSizePolicy>
 #include <QStandardPaths>
 #include <QTimer>
 #include <QVBoxLayout>
+#include <QVector>
 #include <QWindow>
 #include <QWidget>
 
 #include <algorithm>
+#include <cmath>
+#include <utility>
 
 namespace {
 
-constexpr auto kStateProfilesDirName = "state_profiles";
-constexpr auto kDefaultStateFileName = "default_state.json";
+constexpr auto kAssetsDirName = "assets";
+constexpr auto kHfcImagesDirName = "hfc-images";
+constexpr auto kLegacyStateProfilesDirName = "state_profiles";
+constexpr auto kPresetStateFileName = "preset_state.json";
+constexpr auto kLegacyDefaultStateFileName = "default_state.json";
 constexpr auto kCurrentStateFileName = "current_state.json";
+constexpr auto kRuntimeStateFileName = "ui_runtime_state.json";
+constexpr auto kActiveProfileKey = "active_profile";
+constexpr auto kUiFontScaleKey = "ui_font_scale";
+constexpr auto kCurrentProfileName = "current";
+constexpr auto kDefaultProfileName = "preset";
+constexpr auto kLegacyDefaultProfileName = "default";
+constexpr auto kProfileCommentKey = "profile_comment";
+constexpr int kMaxPanelDecimals = 2;
+constexpr double kRadiansToDegrees = 180.0 / 3.14159265358979323846;
+constexpr double kMinUiFontScale = 0.65;
+constexpr double kMaxUiFontScale = 1.8;
+constexpr double kUiFontScaleStep = 0.1;
+constexpr auto kBaseFontPointSizeProperty = "pixelToRayBaseFontPointSize";
+constexpr int kControlOverlayBaseMinWidth = 760;
+constexpr int kControlOverlayBaseMaxWidth = 860;
+constexpr int kControlOverlayAutoHideIntervalMs = 150;
+
+struct AxisAngleComponents {
+    double axisX = 0.0;
+    double axisY = 0.0;
+    double axisZ = 1.0;
+    double angleDegrees = 0.0;
+};
+
+struct ControlTabGroup {
+    QString title;
+    QVector<QWidget *> widgets;
+};
+
+bool widgetContainsGlobalPoint(QWidget *widget, const QPoint &globalPoint) {
+    return widget != nullptr
+        && widget->isVisible()
+        && widget->rect().contains(widget->mapFromGlobal(globalPoint));
+}
+
+bool widgetContainsFocusedChild(QWidget *root, QWidget *focusedWidget) {
+    for (QWidget *widget = focusedWidget; widget != nullptr; widget = widget->parentWidget()) {
+        if (widget == root) {
+            return true;
+        }
+    }
+    return false;
+}
+
+QWidget *firstFocusableControlWidget(const QVector<QWidget *> &widgets, QWidget *fallback) {
+    for (QWidget *widget : widgets) {
+        if (widget == nullptr) {
+            continue;
+        }
+        QList<QWidget *> candidates{widget};
+        candidates.append(widget->findChildren<QWidget *>());
+        for (QWidget *candidate : candidates) {
+            if (candidate != nullptr
+                && candidate->isEnabled()
+                && candidate->isVisible()
+                && candidate->focusPolicy() != Qt::NoFocus) {
+                return candidate;
+            }
+        }
+    }
+    return fallback;
+}
+
+int panelDecimals(int decimals) {
+    return std::clamp(decimals, 0, kMaxPanelDecimals);
+}
+
+double panelNumber(double value) {
+    const double scale = std::pow(10.0, kMaxPanelDecimals);
+    return std::round(value * scale) / scale;
+}
+
+AxisAngleComponents axisAngleFromQuaternion(const QQuaternion &orientation) {
+    QQuaternion q = orientation.normalized();
+    if (q.scalar() < 0.0f) {
+        q = QQuaternion(-q.scalar(), -q.x(), -q.y(), -q.z());
+    }
+
+    const double x = q.x();
+    const double y = q.y();
+    const double z = q.z();
+    const double vectorLength = std::sqrt(x * x + y * y + z * z);
+    if (vectorLength < 1e-8) {
+        return {};
+    }
+
+    return {
+        panelNumber(x / vectorLength),
+        panelNumber(y / vectorLength),
+        panelNumber(z / vectorLength),
+        panelNumber(2.0 * std::atan2(vectorLength, static_cast<double>(q.scalar())) * kRadiansToDegrees)
+    };
+}
+
+double vaAngleDegrees(double positiveY, double globeRadius) {
+    if (globeRadius <= 0.0) {
+        return 0.0;
+    }
+    return panelNumber(std::atan2(std::max(0.0, positiveY), globeRadius) * kRadiansToDegrees);
+}
+
+QString resolveAssetsDirectoryPath() {
+    const QString appDir = QCoreApplication::applicationDirPath();
+    const QStringList candidates = {
+        QDir::current().absoluteFilePath(QLatin1String(kAssetsDirName)),
+        QDir(appDir).absoluteFilePath(QStringLiteral("../") + QLatin1String(kAssetsDirName)),
+        QDir(appDir).absoluteFilePath(QStringLiteral("../../") + QLatin1String(kAssetsDirName)),
+        QDir(appDir).absoluteFilePath(QStringLiteral("../../../") + QLatin1String(kAssetsDirName)),
+        QDir(appDir).absoluteFilePath(QLatin1String(kAssetsDirName))
+    };
+
+    for (const QString &path : candidates) {
+        const QFileInfo info(path);
+        if (info.isDir()) {
+            return info.absoluteFilePath();
+        }
+    }
+
+    return QDir(appDir).absoluteFilePath(QStringLiteral("../") + QLatin1String(kAssetsDirName));
+}
+
+QString resolveLegacyStateProfilesDirectoryPath() {
+    const QString baseDir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+    return QDir(baseDir).filePath(QLatin1String(kLegacyStateProfilesDirName));
+}
+
+QString resolveHfcImagesDirectoryPath() {
+    return QDir(resolveAssetsDirectoryPath()).absoluteFilePath(QLatin1String(kHfcImagesDirName));
+}
+
+QString legacyStateFilePath(QLatin1String fileName) {
+    return QDir(resolveLegacyStateProfilesDirectoryPath()).filePath(fileName);
+}
+
+QString normalizedPathText(QString path) {
+    return path.trimmed().replace(QLatin1Char('\\'), QLatin1Char('/'));
+}
+
+bool relativePathStaysInsideBase(const QString &relativePath) {
+    const QString normalized = normalizedPathText(relativePath);
+    return !normalized.isEmpty()
+        && normalized != QLatin1String(".")
+        && normalized != QLatin1String("..")
+        && !normalized.startsWith(QStringLiteral("../"))
+        && !QDir::isAbsolutePath(normalized);
+}
+
+QString hfcRelativeImagePath(const QString &path) {
+    const QString normalized = normalizedPathText(path);
+    if (normalized.isEmpty()) {
+        return QString();
+    }
+
+    const QString lower = normalized.toLower();
+    const QString assetsHfcPrefix = QStringLiteral("assets/")
+        + QString::fromLatin1(kHfcImagesDirName) + QLatin1Char('/');
+    const QString hfcPrefix = QString::fromLatin1(kHfcImagesDirName) + QLatin1Char('/');
+    if (lower == QStringLiteral("assets/") + QLatin1String(kHfcImagesDirName)
+        || lower == QLatin1String(kHfcImagesDirName)) {
+        return QString();
+    }
+    if (lower.startsWith(assetsHfcPrefix)) {
+        return normalized.mid(assetsHfcPrefix.size()).trimmed();
+    }
+    if (lower.startsWith(hfcPrefix)) {
+        return normalized.mid(hfcPrefix.size()).trimmed();
+    }
+
+    const QFileInfo info(normalized);
+    if (info.isAbsolute()) {
+        QString relativePath = QDir(resolveHfcImagesDirectoryPath()).relativeFilePath(info.absoluteFilePath());
+        relativePath = normalizedPathText(relativePath);
+        if (relativePathStaysInsideBase(relativePath)) {
+            return relativePath;
+        }
+    }
+
+    return normalized;
+}
+
+QString resolveFisheyeImagePath(const QString &storedPath) {
+    const QString normalized = normalizedPathText(storedPath);
+    if (normalized.isEmpty()) {
+        return QString();
+    }
+
+    const QFileInfo info(normalized);
+    if (info.isAbsolute()) {
+        return info.absoluteFilePath();
+    }
+
+    const QString lower = normalized.toLower();
+    const QString assetsPrefix = QStringLiteral("assets/");
+    const QString hfcPrefix = QString::fromLatin1(kHfcImagesDirName) + QLatin1Char('/');
+    if (lower == QLatin1String(kHfcImagesDirName) || lower.startsWith(hfcPrefix)) {
+        return QFileInfo(QDir(resolveAssetsDirectoryPath()).absoluteFilePath(normalized)).absoluteFilePath();
+    }
+    if (lower == QStringLiteral("testing-images")
+        || lower.startsWith(QStringLiteral("testing-images/"))) {
+        return QFileInfo(QDir(resolveAssetsDirectoryPath()).absoluteFilePath(normalized)).absoluteFilePath();
+    }
+    if (lower.startsWith(assetsPrefix)) {
+        return QFileInfo(QDir(resolveAssetsDirectoryPath()).absoluteFilePath(normalized.mid(assetsPrefix.size()))).absoluteFilePath();
+    }
+
+    return QFileInfo(QDir(resolveHfcImagesDirectoryPath()).absoluteFilePath(normalized)).absoluteFilePath();
+}
 
 QString resolveBuiltInFisheyePath() {
-    const QString fileName = QStringLiteral("circular.png");
+    const QString fileName = QStringLiteral("cj-circular.png");
+    const QString assetsDir = resolveAssetsDirectoryPath();
     const QStringList candidates = {
+        QDir(assetsDir).absoluteFilePath(QStringLiteral("hfc-images/") + fileName),
+        QDir(assetsDir).absoluteFilePath(QStringLiteral("testing-images/") + fileName),
+        QDir(assetsDir).absoluteFilePath(fileName),
         QDir::current().absoluteFilePath(fileName),
         QDir(QCoreApplication::applicationDirPath()).absoluteFilePath(QStringLiteral("../") + fileName),
         QDir(QCoreApplication::applicationDirPath()).absoluteFilePath(QStringLiteral("../../") + fileName)
     };
     for (const QString &path : candidates) {
         if (QFileInfo::exists(path)) {
-            return QFileInfo(path).absoluteFilePath();
+            return hfcRelativeImagePath(QFileInfo(path).absoluteFilePath());
         }
     }
     return QString();
 }
 
-bool matchesPreferredScreen(QScreen *screen) {
-    if (screen == nullptr) {
-        return false;
-    }
-
-    const Qt::CaseSensitivity cs = Qt::CaseInsensitive;
-    return screen->name().contains(QStringLiteral("EV2785"), cs)
-        || screen->model().contains(QStringLiteral("EV2785"), cs)
-        || screen->manufacturer().contains(QStringLiteral("EIZO"), cs);
-}
-
 QScreen *preferredStartupScreen(QMainWindow *window) {
     const QList<QScreen *> screens = QGuiApplication::screens();
-    QScreen *currentScreen = QGuiApplication::screenAt(QCursor::pos());
-    if (currentScreen == nullptr) {
-        currentScreen = window->screen();
-    }
-
+    QScreen *leftmostScreen = nullptr;
     for (QScreen *screen : screens) {
-        if (matchesPreferredScreen(screen)) {
-            return screen;
+        if (screen == nullptr) {
+            continue;
+        }
+        if (leftmostScreen == nullptr) {
+            leftmostScreen = screen;
+            continue;
+        }
+        const QRect candidate = screen->geometry();
+        const QRect selected = leftmostScreen->geometry();
+        if (candidate.left() < selected.left()
+            || (candidate.left() == selected.left() && candidate.top() < selected.top())) {
+            leftmostScreen = screen;
         }
     }
 
-    if (screens.size() > 1) {
-        for (QScreen *screen : screens) {
-            if (screen != nullptr && screen != currentScreen) {
-                return screen;
-            }
-        }
+    if (leftmostScreen != nullptr) {
+        return leftmostScreen;
     }
-
-    if (currentScreen != nullptr) {
-        return currentScreen;
+    if (window != nullptr && window->screen() != nullptr) {
+        return window->screen();
     }
-
     return QGuiApplication::primaryScreen();
 }
 
@@ -170,19 +381,41 @@ QLabel *createReadOnlyValueLabel(const QString &text, QWidget *parent) {
     return label;
 }
 
+QWidget *createRotationDelimiter(QWidget *parent) {
+    auto *label = new QLabel(QObject::tr("Euler axis-angle equivalent  |  read-only"), parent);
+    label->setStyleSheet(QStringLiteral(
+        "QLabel { background: #312e81; color: #fef3c7; border-left: 5px solid #f59e0b; padding: 7px 10px; font-weight: 700; }"
+    ));
+    return label;
+}
+
 }  // namespace
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent) {
+    m_baseUiFontPointSize = QApplication::font().pointSizeF();
+    if (m_baseUiFontPointSize <= 0.0) {
+        m_baseUiFontPointSize = font().pointSizeF() > 0.0 ? font().pointSizeF() : 10.0;
+    }
+
     PanelState builtInDefaults;
     builtInDefaults.fisheyeImagePath = resolveBuiltInFisheyePath();
-    m_defaultStateProfile = loadPanelStateFromJson(defaultStateJsonPath(), builtInDefaults);
-    m_currentStateSnapshot = loadPanelStateFromJson(currentStateJsonPath(), m_defaultStateProfile);
+    const PanelState legacyDefaults = loadPanelStateFromJson(
+        legacyStateFilePath(QLatin1String(kLegacyDefaultStateFileName)),
+        builtInDefaults);
+    const PanelState assetLegacyDefaults = loadPanelStateFromJson(
+        QDir(stateProfilesDirectory()).filePath(QLatin1String(kLegacyDefaultStateFileName)),
+        legacyDefaults);
+    m_defaultStateProfile = loadPanelStateFromJson(defaultStateJsonPath(), assetLegacyDefaults);
+    const PanelState legacyCurrent = loadPanelStateFromJson(
+        legacyStateFilePath(QLatin1String(kCurrentStateFileName)),
+        m_defaultStateProfile);
+    m_currentStateSnapshot = loadPanelStateFromJson(currentStateJsonPath(), legacyCurrent);
     savePanelStateToJson(defaultStateJsonPath(), m_defaultStateProfile);
     savePanelStateToJson(currentStateJsonPath(), m_currentStateSnapshot);
 
     auto *central = new QWidget(this);
-    auto *layout = new QHBoxLayout(central);
+    auto *layout = new QGridLayout(central);
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(0);
 
@@ -190,14 +423,21 @@ MainWindow::MainWindow(QWidget *parent)
     m_view->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
 
     auto *panel = new QWidget(central);
-    panel->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
-    panel->setMinimumWidth(760);
+    m_controlOverlayPanel = panel;
+    panel->setObjectName(QStringLiteral("controlOverlayPanel"));
+    panel->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Maximum);
+    panel->setFocusPolicy(Qt::StrongFocus);
+    panel->setMinimumWidth(kControlOverlayBaseMinWidth);
+    panel->setMaximumWidth(kControlOverlayBaseMaxWidth);
 
     QPalette palette = panel->palette();
     palette.setColor(QPalette::Window, QColor(0x11, 0x18, 0x27));
     palette.setColor(QPalette::WindowText, QColor(0xe5, 0xe7, 0xeb));
     panel->setAutoFillBackground(true);
     panel->setPalette(palette);
+    panel->setStyleSheet(QStringLiteral(
+        "QWidget#controlOverlayPanel { background: rgba(17, 24, 39, 238); border: 1px solid #334155; }"
+    ));
 
     auto *panelLayout = new QVBoxLayout(panel);
     panelLayout->setContentsMargins(16, 16, 16, 16);
@@ -209,7 +449,19 @@ MainWindow::MainWindow(QWidget *parent)
     titleFont.setBold(true);
     title->setFont(titleFont);
     title->setStyleSheet(QStringLiteral("color: #f9fafb;"));
-    panelLayout->addWidget(title);
+    auto *panelHeader = new QWidget(panel);
+    auto *panelHeaderLayout = new QHBoxLayout(panelHeader);
+    panelHeaderLayout->setContentsMargins(0, 0, 0, 0);
+    panelHeaderLayout->setSpacing(10);
+    auto *hidePanelButton = new QPushButton(tr("Hide"), panelHeader);
+    hidePanelButton->setToolTip(tr("Hide the Control Table overlay"));
+    hidePanelButton->setStyleSheet(QStringLiteral(
+        "QPushButton { background: #1f2937; color: #e5e7eb; border: 1px solid #475569; padding: 5px 10px; }"
+        "QPushButton:hover { background: #334155; }"
+    ));
+    panelHeaderLayout->addWidget(title, 1);
+    panelHeaderLayout->addWidget(hidePanelButton, 0);
+    panelLayout->addWidget(panelHeader);
 
     auto *grid = new QGridLayout();
     grid->setColumnMinimumWidth(0, 150);
@@ -222,8 +474,8 @@ MainWindow::MainWindow(QWidget *parent)
     auto createDefaultSpin = [panel](double minValue, double maxValue, int decimals, double value) {
         auto *spin = new QDoubleSpinBox(panel);
         spin->setRange(minValue, maxValue);
-        spin->setDecimals(decimals);
-        spin->setValue(value);
+        spin->setDecimals(panelDecimals(decimals));
+        spin->setValue(panelNumber(value));
         configureReadOnlySpin(spin);
         return spin;
     };
@@ -239,14 +491,28 @@ MainWindow::MainWindow(QWidget *parent)
         rowLayout->addWidget(createDefaultLockLabel(locked), 0);
         return container;
     };
-    auto addSectionRow = [grid, panel](int &row, const QString &title) {
+    QVector<ControlTabGroup> controlTabs;
+    int activeControlTab = -1;
+    auto rememberControlTabWidget = [&controlTabs, &activeControlTab](QWidget *widget) {
+        if (widget != nullptr && activeControlTab >= 0 && activeControlTab < controlTabs.size()) {
+            controlTabs[activeControlTab].widgets.append(widget);
+        }
+    };
+    auto addSectionRow = [grid, panel, &controlTabs, &activeControlTab, &rememberControlTabWidget](int &row, const QString &title) {
+        controlTabs.append({title, {}});
+        activeControlTab = controlTabs.size() - 1;
         auto *label = qobject_cast<QLabel *>(createSectionLabel(title, panel));
         grid->addWidget(label, row++, 0, 1, 3);
+        rememberControlTabWidget(label);
+    };
+    auto addFullWidthRow = [grid, &rememberControlTabWidget](int &row, QWidget *widget) {
+        grid->addWidget(widget, row++, 0, 1, 3);
+        rememberControlTabWidget(widget);
     };
     auto addTableHeaders = [this, grid, panel](int &row) {
         auto *fieldHeader = new QLabel(tr("Field"), panel);
         m_currentHeaderButton = createHeaderModeButton(tr("Current"), panel);
-        m_defaultHeaderButton = createHeaderModeButton(tr("Default"), panel);
+        m_defaultHeaderButton = createHeaderModeButton(tr("Preset"), panel);
         const QString style = QStringLiteral("color: #cbd5e1; font-weight: 600; padding: 2px 0;");
         fieldHeader->setStyleSheet(style);
         grid->addWidget(fieldHeader, row, 0);
@@ -254,13 +520,16 @@ MainWindow::MainWindow(QWidget *parent)
         grid->addWidget(m_defaultHeaderButton, row, 2);
         ++row;
     };
-    auto addRow = [grid, panel](int &row, const QString &name, QWidget *current, QWidget *deflt) {
+    auto addRow = [grid, panel, &rememberControlTabWidget](int &row, const QString &name, QWidget *current, QWidget *deflt) {
         auto *field = new QLabel(name, panel);
         field->setStyleSheet(QStringLiteral("color: #e5e7eb;"));
         field->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
         grid->addWidget(field, row, 0);
         grid->addWidget(current, row, 1);
         grid->addWidget(deflt, row, 2);
+        rememberControlTabWidget(field);
+        rememberControlTabWidget(current);
+        rememberControlTabWidget(deflt);
         ++row;
     };
 
@@ -273,6 +542,7 @@ MainWindow::MainWindow(QWidget *parent)
     m_yTraceButton = createStatusToggleButton(panel);
     m_xCylinderButton = createStatusToggleButton(panel);
     m_surfaceDepthButton = createStatusToggleButton(panel);
+    m_capClosedButton = createStatusToggleButton(panel);
     m_projectionButton = createStatusToggleButton(panel);
     m_activeLabel->setStyleSheet(QStringLiteral("color: #e5e7eb;"));
     m_fisheyeImageLabel->setStyleSheet(QStringLiteral("color: #cbd5e1;"));
@@ -284,6 +554,7 @@ MainWindow::MainWindow(QWidget *parent)
     addRow(row, tr("y-axis great-circle trace"), m_yTraceButton, createReadOnlyValueLabel(defaults.panoramaBandVisible ? tr("on") : tr("off"), panel));
     addRow(row, tr("x-axis tangential cylinder"), m_xCylinderButton, createReadOnlyValueLabel(defaults.xTangentCylinderVisible ? tr("on") : tr("off"), panel));
     addRow(row, tr("Surface Depth Hiding"), m_surfaceDepthButton, createReadOnlyValueLabel(defaults.surfaceDepthHidingEnabled ? tr("on") : tr("off"), panel));
+    addRow(row, tr("Cap Closed"), m_capClosedButton, createReadOnlyValueLabel(defaults.capClosed ? tr("on") : tr("off"), panel));
     addRow(row, tr("Projection"), m_projectionButton, createReadOnlyValueLabel(defaults.perspectiveProjection ? tr("perspective") : tr("orthographic"), panel));
 
     m_latitudeSpin = createSpinBox(-89.0, 89.0, 1.0, 2);
@@ -304,6 +575,14 @@ MainWindow::MainWindow(QWidget *parent)
     m_globeOrientationXSpin = createSpinBox(-1.0, 1.0, 0.01, 4);
     m_globeOrientationYSpin = createSpinBox(-1.0, 1.0, 0.01, 4);
     m_globeOrientationZSpin = createSpinBox(-1.0, 1.0, 0.01, 4);
+    m_eulerAxisXSpin = createSpinBox(-1.0, 1.0, 0.0, 2);
+    m_eulerAxisYSpin = createSpinBox(-1.0, 1.0, 0.0, 2);
+    m_eulerAxisZSpin = createSpinBox(-1.0, 1.0, 0.0, 2);
+    m_eulerAngleSpin = createSpinBox(0.0, 360.0, 0.0, 2);
+    configureReadOnlySpin(m_eulerAxisXSpin);
+    configureReadOnlySpin(m_eulerAxisYSpin);
+    configureReadOnlySpin(m_eulerAxisZSpin);
+    configureReadOnlySpin(m_eulerAngleSpin);
     m_perspectiveFovYSpin = createSpinBox(5.0, 140.0, 1.0, 1);
     m_anchorXSpin = createSpinBox(-9999.0, 9999.0, 0.0, 3);
     m_anchorYSpin = createSpinBox(-9999.0, 9999.0, 0.0, 3);
@@ -320,10 +599,32 @@ MainWindow::MainWindow(QWidget *parent)
     addRow(row, tr("Anchor Z"), m_anchorZSpin, createReadOnlyValueLabel(tr("derived from lat/lon"), panel));
 
     addSectionRow(row, tr("Global Orientation"));
-    addRow(row, tr("Globe q_w"), m_globeOrientationWSpin, createDefaultSpin(-1.0, 1.0, 4, defaults.globeOrientation.scalar()));
-    addRow(row, tr("Globe q_x"), m_globeOrientationXSpin, createDefaultSpin(-1.0, 1.0, 4, defaults.globeOrientation.x()));
-    addRow(row, tr("Globe q_y"), m_globeOrientationYSpin, createDefaultSpin(-1.0, 1.0, 4, defaults.globeOrientation.y()));
-    addRow(row, tr("Globe q_z"), m_globeOrientationZSpin, createDefaultSpin(-1.0, 1.0, 4, defaults.globeOrientation.z()));
+    addRow(row,
+           tr("Globe q_w"),
+           createLockableEditor(m_globeOrientationWSpin, &m_globeOrientationWLock),
+           createDefaultValueWithLock(createDefaultSpin(-1.0, 1.0, 4, defaults.globeOrientation.scalar()),
+                                      defaults.globeOrientationScalarLocked));
+    addRow(row,
+           tr("Globe q_x"),
+           createLockableEditor(m_globeOrientationXSpin, &m_globeOrientationXLock),
+           createDefaultValueWithLock(createDefaultSpin(-1.0, 1.0, 4, defaults.globeOrientation.x()),
+                                      defaults.globeOrientationXLocked));
+    addRow(row,
+           tr("Globe q_y"),
+           createLockableEditor(m_globeOrientationYSpin, &m_globeOrientationYLock),
+           createDefaultValueWithLock(createDefaultSpin(-1.0, 1.0, 4, defaults.globeOrientation.y()),
+                                      defaults.globeOrientationYLocked));
+    addRow(row,
+           tr("Globe q_z"),
+           createLockableEditor(m_globeOrientationZSpin, &m_globeOrientationZLock),
+           createDefaultValueWithLock(createDefaultSpin(-1.0, 1.0, 4, defaults.globeOrientation.z()),
+                                      defaults.globeOrientationZLocked));
+    const AxisAngleComponents defaultAxisAngle = axisAngleFromQuaternion(defaults.globeOrientation);
+    addFullWidthRow(row, createRotationDelimiter(panel));
+    addRow(row, tr("Euler axis_x"), m_eulerAxisXSpin, createDefaultSpin(-1.0, 1.0, 2, defaultAxisAngle.axisX));
+    addRow(row, tr("Euler axis_y"), m_eulerAxisYSpin, createDefaultSpin(-1.0, 1.0, 2, defaultAxisAngle.axisY));
+    addRow(row, tr("Euler axis_z"), m_eulerAxisZSpin, createDefaultSpin(-1.0, 1.0, 2, defaultAxisAngle.axisZ));
+    addRow(row, tr("Euler angle deg"), m_eulerAngleSpin, createDefaultSpin(0.0, 360.0, 2, defaultAxisAngle.angleDegrees));
 
     m_cameraEyeOffsetXSpin = createSpinBox(-9999.0, 9999.0, 0.1, 3);
     m_cameraEyeOffsetYSpin = createSpinBox(-9999.0, 9999.0, 0.1, 3);
@@ -343,9 +644,9 @@ MainWindow::MainWindow(QWidget *parent)
     addRow(row, tr("Eye Offset X"), createLockableEditor(m_cameraEyeOffsetXSpin, &m_cameraEyeOffsetXLock), createDefaultValueWithLock(createDefaultSpin(-9999.0, 9999.0, 3, defaults.cameraEyeOffsetX), defaults.cameraEyeOffsetXLocked));
     addRow(row, tr("Eye Offset Y"), createLockableEditor(m_cameraEyeOffsetYSpin, &m_cameraEyeOffsetYLock), createDefaultValueWithLock(createDefaultSpin(-9999.0, 9999.0, 3, defaults.cameraEyeOffsetY), defaults.cameraEyeOffsetYLocked));
     addRow(row, tr("Eye Offset Z"), createLockableEditor(m_cameraEyeOffsetZSpin, &m_cameraEyeOffsetZLock), createDefaultValueWithLock(createDefaultSpin(-9999.0, 9999.0, 3, defaults.cameraEyeOffsetZ), defaults.cameraEyeOffsetZLocked));
-    addRow(row, tr("Target X"), m_cameraTargetXSpin, createReadOnlyValueLabel(tr("0.000 or anchor X"), panel));
-    addRow(row, tr("Target Y"), m_cameraTargetYSpin, createReadOnlyValueLabel(tr("0.000 or anchor Y"), panel));
-    addRow(row, tr("Target Z"), m_cameraTargetZSpin, createReadOnlyValueLabel(tr("0.000 or anchor Z"), panel));
+    addRow(row, tr("Target X"), m_cameraTargetXSpin, createReadOnlyValueLabel(tr("0.00 or anchor X"), panel));
+    addRow(row, tr("Target Y"), m_cameraTargetYSpin, createReadOnlyValueLabel(tr("0.00 or anchor Y"), panel));
+    addRow(row, tr("Target Z"), m_cameraTargetZSpin, createReadOnlyValueLabel(tr("0.00 or anchor Z"), panel));
     addRow(row, tr("Up X"), createLockableEditor(m_cameraUpXSpin, &m_cameraUpXLock), createDefaultValueWithLock(createDefaultSpin(-9999.0, 9999.0, 3, defaults.cameraUpX), defaults.cameraUpXLocked));
     addRow(row, tr("Up Y"), createLockableEditor(m_cameraUpYSpin, &m_cameraUpYLock), createDefaultValueWithLock(createDefaultSpin(-9999.0, 9999.0, 3, defaults.cameraUpY), defaults.cameraUpYLocked));
     addRow(row, tr("Up Z"), createLockableEditor(m_cameraUpZSpin, &m_cameraUpZLock), createDefaultValueWithLock(createDefaultSpin(-9999.0, 9999.0, 3, defaults.cameraUpZ), defaults.cameraUpZLocked));
@@ -353,15 +654,21 @@ MainWindow::MainWindow(QWidget *parent)
     m_positiveXSpin = createSpinBox(FrameMath::kMinLength, FrameMath::kMaxLength, 0.01, 3);
     m_negtiveXSpin = createSpinBox(FrameMath::kMinLength, FrameMath::kMaxLength, 0.01, 3);
     m_positiveYSpin = createSpinBox(FrameMath::kMinLength, FrameMath::kMaxLength, 0.01, 3);
+    m_vaSpin = createSpinBox(0.0, 90.0, 0.1, 2);
     m_negtiveYSpin = createSpinBox(FrameMath::kMinLength, FrameMath::kMaxLength, 0.01, 3);
     m_positiveZSpin = createSpinBox(FrameMath::kMinLength, FrameMath::kMaxLength, 0.01, 3);
     m_negtiveZSpin = createSpinBox(0.01, 9999.0, 0.0, 3);
+    m_vaSpin->setSuffix(tr(" deg"));
+    configureReadOnlySpin(m_vaSpin);
     m_negtiveZSpin->setEnabled(false);
 
     addSectionRow(row, tr("Components"));
     addRow(row, tr("positive_x"), createLockableEditor(m_positiveXSpin, &m_positiveXLock), createDefaultValueWithLock(createDefaultSpin(FrameMath::kMinLength, FrameMath::kMaxLength, 3, defaults.positiveX), defaults.positiveXLocked));
     addRow(row, tr("negtive_x"), createLockableEditor(m_negtiveXSpin, &m_negtiveXLock), createDefaultValueWithLock(createDefaultSpin(FrameMath::kMinLength, FrameMath::kMaxLength, 3, defaults.negtiveX), defaults.negtiveXLocked));
     addRow(row, tr("positive_y"), createLockableEditor(m_positiveYSpin, &m_positiveYLock), createDefaultValueWithLock(createDefaultSpin(FrameMath::kMinLength, FrameMath::kMaxLength, 3, defaults.positiveY), defaults.positiveYLocked));
+    auto *defaultVaSpin = createDefaultSpin(0.0, 90.0, 2, vaAngleDegrees(defaults.positiveY, defaults.globeRadius));
+    defaultVaSpin->setSuffix(tr(" deg"));
+    addRow(row, tr("va"), m_vaSpin, defaultVaSpin);
     addRow(row, tr("negtive_y"), createLockableEditor(m_negtiveYSpin, &m_negtiveYLock), createDefaultValueWithLock(createDefaultSpin(FrameMath::kMinLength, FrameMath::kMaxLength, 3, defaults.negtiveY), defaults.negtiveYLocked));
     addRow(row, tr("positive_z"), createLockableEditor(m_positiveZSpin, &m_positiveZLock), createDefaultValueWithLock(createDefaultSpin(FrameMath::kMinLength, FrameMath::kMaxLength, 3, defaults.positiveZ), defaults.positiveZLocked));
     addRow(row, tr("negtive_z"), m_negtiveZSpin, createReadOnlyValueLabel(tr("fixed to globe radius"), panel));
@@ -369,6 +676,8 @@ MainWindow::MainWindow(QWidget *parent)
     panelLayout->addLayout(grid);
 
     auto *hintLabel = new QLabel(tr("Hints\n"
+                                    "Control tabs: hover or Ctrl+1..Ctrl+6\n"
+                                    "Overlay hides after pointer and focus leave\n"
                                     "ESC: quit\n"
                                     "Global Center / y-axis great-circle trace /\n"
                                     "x-axis tangential cylinder: right click in viewport"), panel);
@@ -379,14 +688,113 @@ MainWindow::MainWindow(QWidget *parent)
 
     panelLayout->addStretch(1);
 
-    layout->addWidget(m_view, 3);
-    layout->addWidget(panel, 2);
+    layout->addWidget(m_view, 0, 0);
+    layout->addWidget(panel, 0, 0, Qt::AlignLeft | Qt::AlignTop);
+    panel->hide();
     setCentralWidget(central);
+
+    m_controlOverlayAutoHideTimer = new QTimer(this);
+    m_controlOverlayAutoHideTimer->setInterval(kControlOverlayAutoHideIntervalMs);
+    connect(m_controlOverlayAutoHideTimer, &QTimer::timeout, this, [this]() {
+        if (m_controlOverlayPanel == nullptr || !m_controlOverlayPanel->isVisible()) {
+            m_controlOverlayAutoHideTimer->stop();
+            return;
+        }
+
+        const QPoint cursorPosition = QCursor::pos();
+        const bool cursorInPanel = widgetContainsGlobalPoint(m_controlOverlayPanel, cursorPosition);
+        const bool cursorInMenuBar = widgetContainsGlobalPoint(menuBar(), cursorPosition);
+        if (cursorInPanel) {
+            m_controlOverlayCursorTrackingActive = true;
+            return;
+        }
+        if (cursorInMenuBar) {
+            return;
+        }
+
+        const bool focusInPanel = widgetContainsFocusedChild(m_controlOverlayPanel, QApplication::focusWidget());
+        if (m_controlOverlayCursorTrackingActive || !focusInPanel) {
+            if (focusInPanel && QApplication::focusWidget() != nullptr) {
+                QApplication::focusWidget()->clearFocus();
+            }
+            m_controlOverlayPanel->hide();
+            m_controlOverlayCursorTrackingActive = false;
+            m_controlOverlayAutoHideTimer->stop();
+        }
+    });
 
     auto *commandsMenu = menuBar()->addMenu(tr("Commands"));
     QAction *setFisheyeImageAction = commandsMenu->addAction(tr("Set Fisheye Image..."));
     QAction *reloadFisheyeImageAction = commandsMenu->addAction(tr("Reload Fisheye Image"));
     QAction *clearFisheyeImageAction = commandsMenu->addAction(tr("Clear Fisheye Image"));
+
+    auto applyControlTab = [this, controlTabs, panel, title](int index) {
+        if (index < 0 || index >= controlTabs.size()) {
+            return;
+        }
+        for (int groupIndex = 0; groupIndex < controlTabs.size(); ++groupIndex) {
+            const bool visible = groupIndex == index;
+            for (QWidget *widget : controlTabs[groupIndex].widgets) {
+                if (widget != nullptr) {
+                    widget->setVisible(visible);
+                }
+            }
+        }
+        title->setText(tr("Control Table - %1").arg(controlTabs[index].title));
+        panel->show();
+        panel->raise();
+        panel->adjustSize();
+        if (QWidget *focusTarget = firstFocusableControlWidget(controlTabs[index].widgets, panel)) {
+            focusTarget->setFocus(Qt::TabFocusReason);
+        }
+        if (m_controlOverlayAutoHideTimer != nullptr && !m_controlOverlayAutoHideTimer->isActive()) {
+            m_controlOverlayAutoHideTimer->start();
+        }
+    };
+    connect(hidePanelButton, &QPushButton::clicked, this, [this]() {
+        if (m_controlOverlayPanel != nullptr) {
+            m_controlOverlayPanel->hide();
+        }
+        m_controlOverlayCursorTrackingActive = false;
+        if (m_controlOverlayAutoHideTimer != nullptr) {
+            m_controlOverlayAutoHideTimer->stop();
+        }
+    });
+
+    menuBar()->setStyleSheet(QStringLiteral(
+        "QMenuBar { background: #f3f4f6; color: #111827; }"
+        "QMenuBar::item { color: #111827; padding: 2px 8px; }"
+        "QMenuBar::item:selected { background: #dbeafe; color: #111827; }"
+        "QMenuBar::item:checked { background: #111827; color: #f8fafc; }"
+    ));
+    auto *controlTabActionGroup = new QActionGroup(menuBar());
+    controlTabActionGroup->setExclusive(true);
+    for (int index = 0; index < controlTabs.size(); ++index) {
+        const QString shortcutText = tr("Ctrl+%1").arg(index + 1);
+        const QString tabText = tr("%1 [%2]").arg(controlTabs[index].title, shortcutText);
+        QAction *tabAction = menuBar()->addAction(tabText);
+        tabAction->setCheckable(true);
+        tabAction->setShortcut(QKeySequence(shortcutText));
+        tabAction->setShortcutContext(Qt::ApplicationShortcut);
+        tabAction->setToolTip(tr("Show %1 controls (%2)").arg(controlTabs[index].title, shortcutText));
+        controlTabActionGroup->addAction(tabAction);
+        connect(menuBar(), &QMenuBar::hovered, this, [this, applyControlTab, tabAction, index](QAction *hoveredAction) {
+            if (hoveredAction == tabAction) {
+                m_controlOverlayCursorTrackingActive = true;
+                tabAction->setChecked(true);
+                applyControlTab(index);
+            }
+        });
+        connect(tabAction, &QAction::triggered, this, [this, applyControlTab, index]() {
+            m_controlOverlayCursorTrackingActive = widgetContainsGlobalPoint(menuBar(), QCursor::pos());
+            applyControlTab(index);
+        });
+        if (index == 0) {
+            tabAction->setChecked(true);
+        }
+    }
+    installUiFontShortcuts();
+    applyUiFontScale();
 
     connect(m_view, &PixelToRayWidget::statusTextChanged, this, [this](const QString &) {
         if (!m_loadingSettings) {
@@ -545,6 +953,30 @@ MainWindow::MainWindow(QWidget *parent)
             syncInfoPanel();
         }
     });
+    connect(m_globeOrientationWLock, &QCheckBox::toggled, this, [this](bool checked) {
+        if (!m_syncingInfoPanel) {
+            m_view->setGlobeOrientationScalarLocked(checked);
+            syncInfoPanel();
+        }
+    });
+    connect(m_globeOrientationXLock, &QCheckBox::toggled, this, [this](bool checked) {
+        if (!m_syncingInfoPanel) {
+            m_view->setGlobeOrientationXLocked(checked);
+            syncInfoPanel();
+        }
+    });
+    connect(m_globeOrientationYLock, &QCheckBox::toggled, this, [this](bool checked) {
+        if (!m_syncingInfoPanel) {
+            m_view->setGlobeOrientationYLocked(checked);
+            syncInfoPanel();
+        }
+    });
+    connect(m_globeOrientationZLock, &QCheckBox::toggled, this, [this](bool checked) {
+        if (!m_syncingInfoPanel) {
+            m_view->setGlobeOrientationZLocked(checked);
+            syncInfoPanel();
+        }
+    });
     connect(m_cameraEyeOffsetXLock, &QCheckBox::toggled, this, [this](bool checked) {
         if (!m_syncingInfoPanel) {
             m_view->setCameraEyeOffsetXLocked(checked);
@@ -581,34 +1013,21 @@ MainWindow::MainWindow(QWidget *parent)
             syncInfoPanel();
         }
     });
-    auto switchRuntimeState = [this](bool showCurrent) {
-        if (showCurrent == m_showingCurrentState) {
-            return;
-        }
-
-        if (!showCurrent) {
-            m_currentStateSnapshot = capturePanelState();
-            m_showingCurrentState = false;
-            applyDefaultPanelState();
-        } else {
-            m_showingCurrentState = true;
-            applyPanelState(m_currentStateSnapshot);
-        }
-
-        syncInfoPanel();
-        saveStateFiles();
-    };
-    connect(m_currentHeaderButton, &QPushButton::clicked, this, [this, switchRuntimeState]() {
+    connect(m_currentHeaderButton, &QPushButton::clicked, this, [this]() {
         if (m_syncingInfoPanel) {
             return;
         }
-        switchRuntimeState(true);
+        if (setShowingCurrentState(true, true)) {
+            saveStateFiles();
+        }
     });
-    connect(m_defaultHeaderButton, &QPushButton::clicked, this, [this, switchRuntimeState]() {
+    connect(m_defaultHeaderButton, &QPushButton::clicked, this, [this]() {
         if (m_syncingInfoPanel) {
             return;
         }
-        switchRuntimeState(false);
+        if (setShowingCurrentState(false, true)) {
+            saveStateFiles();
+        }
     });
     connect(m_centerButton, &QPushButton::toggled, this, [this](bool checked) {
         if (!m_syncingInfoPanel) {
@@ -628,6 +1047,11 @@ MainWindow::MainWindow(QWidget *parent)
     connect(m_surfaceDepthButton, &QPushButton::toggled, this, [this](bool checked) {
         if (!m_syncingInfoPanel) {
             m_view->setSurfaceDepthHidingEnabled(checked);
+        }
+    });
+    connect(m_capClosedButton, &QPushButton::toggled, this, [this](bool checked) {
+        if (!m_syncingInfoPanel) {
+            m_view->setCapClosed(checked);
         }
     });
     connect(m_projectionButton, &QPushButton::toggled, this, [this](bool checked) {
@@ -669,6 +1093,7 @@ MainWindow::MainWindow(QWidget *parent)
 
     loadStartupSettings();
     syncInfoPanel();
+    configureStateFileWatcher();
 
     setWindowTitle(tr("Pixel To Ray Qt Window"));
     QTimer::singleShot(0, this, [this]() {
@@ -681,10 +1106,100 @@ void MainWindow::closeEvent(QCloseEvent *event) {
     QMainWindow::closeEvent(event);
 }
 
+void MainWindow::installUiFontShortcuts() {
+    auto addShortcut = [this](const QKeySequence &sequence, const auto &handler) {
+        auto *shortcut = new QShortcut(sequence, this);
+        shortcut->setContext(Qt::ApplicationShortcut);
+        connect(shortcut, &QShortcut::activated, this, handler);
+    };
+
+    addShortcut(QKeySequence(QStringLiteral("Ctrl++")), [this]() {
+        adjustUiFontScale(kUiFontScaleStep);
+    });
+    addShortcut(QKeySequence(QStringLiteral("Ctrl+=")), [this]() {
+        adjustUiFontScale(kUiFontScaleStep);
+    });
+    addShortcut(QKeySequence(QStringLiteral("Ctrl+-")), [this]() {
+        adjustUiFontScale(-kUiFontScaleStep);
+    });
+    addShortcut(QKeySequence(QStringLiteral("Ctrl+0")), [this]() {
+        resetUiFontScale();
+    });
+}
+
+void MainWindow::adjustUiFontScale(double delta) {
+    const double nextScale = std::clamp(m_uiFontScale + delta, kMinUiFontScale, kMaxUiFontScale);
+    if (std::abs(nextScale - m_uiFontScale) < 1e-6) {
+        return;
+    }
+    m_uiFontScale = nextScale;
+    applyUiFontScale();
+    saveActiveProfileRuntimeState();
+}
+
+void MainWindow::resetUiFontScale() {
+    if (std::abs(m_uiFontScale - 1.0) < 1e-6) {
+        return;
+    }
+    m_uiFontScale = 1.0;
+    applyUiFontScale();
+    saveActiveProfileRuntimeState();
+}
+
+void MainWindow::applyUiFontScale() {
+    QFont appFont = QApplication::font();
+    appFont.setPointSizeF(std::max(1.0, m_baseUiFontPointSize * m_uiFontScale));
+    QApplication::setFont(appFont);
+    applyUiFontScale(this);
+
+    if (m_controlOverlayPanel != nullptr) {
+        const int minWidth = std::max(360, static_cast<int>(std::lround(kControlOverlayBaseMinWidth * m_uiFontScale)));
+        const int maxWidth = std::max(minWidth, static_cast<int>(std::lround(kControlOverlayBaseMaxWidth * m_uiFontScale)));
+        m_controlOverlayPanel->setMinimumWidth(minWidth);
+        m_controlOverlayPanel->setMaximumWidth(maxWidth);
+        if (m_controlOverlayPanel->isVisible()) {
+            m_controlOverlayPanel->adjustSize();
+        }
+    }
+}
+
+void MainWindow::applyUiFontScale(QWidget *widget) {
+    if (widget == nullptr) {
+        return;
+    }
+
+    const QList<QWidget *> children = widget->findChildren<QWidget *>(QString(), Qt::FindDirectChildrenOnly);
+    for (QWidget *child : children) {
+        applyUiFontScale(child);
+    }
+
+    bool hasBasePointSize = false;
+    double basePointSize = widget->property(kBaseFontPointSizeProperty).toDouble(&hasBasePointSize);
+    if (!hasBasePointSize || basePointSize <= 0.0) {
+        basePointSize = widget->font().pointSizeF();
+        if (basePointSize <= 0.0) {
+            basePointSize = m_baseUiFontPointSize;
+        }
+        widget->setProperty(kBaseFontPointSizeProperty, basePointSize);
+    }
+
+    QFont scaledFont = widget->font();
+    scaledFont.setPointSizeF(std::max(1.0, basePointSize * m_uiFontScale));
+    widget->setFont(scaledFont);
+}
+
 void MainWindow::loadStartupSettings() {
-    applySavedPanelState();
-    m_currentStateSnapshot = capturePanelState();
-    m_showingCurrentState = true;
+    m_uiFontScale = readUiFontScaleRuntimeState(m_uiFontScale);
+    applyUiFontScale();
+    m_showingCurrentState = readActiveProfileRuntimeState(true);
+    if (m_showingCurrentState) {
+        applyPanelState(m_currentStateSnapshot);
+        m_currentStateSnapshot = capturePanelState();
+    } else {
+        applyDefaultPanelState();
+        m_defaultStateProfile = capturePanelState();
+    }
+    saveActiveProfileRuntimeState();
 }
 
 MainWindow::PanelState MainWindow::capturePanelState() const {
@@ -697,6 +1212,9 @@ MainWindow::PanelState MainWindow::capturePanelState() const {
     state.globeRadius = m_view->globeRadius();
     state.globeOrientation = m_view->globeOrientation();
     state.fisheyeImagePath = m_view->fisheyeImagePath();
+    state.profileComment = m_showingCurrentState
+        ? m_currentStateSnapshot.profileComment
+        : m_defaultStateProfile.profileComment;
     state.perspectiveFovY = m_view->perspectiveFovY();
     state.cameraEyeOffsetX = m_view->cameraEyeOffsetX();
     state.cameraEyeOffsetY = m_view->cameraEyeOffsetY();
@@ -704,10 +1222,14 @@ MainWindow::PanelState MainWindow::capturePanelState() const {
     state.cameraUpX = m_view->cameraUpX();
     state.cameraUpY = m_view->cameraUpY();
     state.cameraUpZ = m_view->cameraUpZ();
+    state.rearHemisphereWireframeVisible = m_view->isRearHemisphereWireframeVisible();
+    state.worldAxesVisible = m_view->isWorldAxesVisible();
+    state.localCoordinateFrameVisible = m_view->isLocalCoordinateFrameVisible();
     state.globalCenterFixed = m_view->isGlobalCenterFixed();
     state.panoramaBandVisible = m_view->isPanoramaBandVisible();
     state.xTangentCylinderVisible = m_view->isXTangentCylinderVisible();
     state.surfaceDepthHidingEnabled = m_view->isSurfaceDepthHidingEnabled();
+    state.capClosed = m_view->isCapClosed();
     state.perspectiveProjection = m_view->isPerspectiveProjection();
     state.positiveX = m_view->componentLength(FrameMath::ComponentId::PositiveX);
     state.negtiveX = m_view->componentLength(FrameMath::ComponentId::NegtiveX);
@@ -720,6 +1242,10 @@ MainWindow::PanelState MainWindow::capturePanelState() const {
     state.zoomLocked = m_view->isZoomLocked();
     state.capPolarAngleLocked = m_view->isCapPolarAngleLocked();
     state.globeRadiusLocked = m_view->isGlobeRadiusLocked();
+    state.globeOrientationScalarLocked = m_view->isGlobeOrientationScalarLocked();
+    state.globeOrientationXLocked = m_view->isGlobeOrientationXLocked();
+    state.globeOrientationYLocked = m_view->isGlobeOrientationYLocked();
+    state.globeOrientationZLocked = m_view->isGlobeOrientationZLocked();
     state.cameraEyeOffsetXLocked = m_view->isCameraEyeOffsetXLocked();
     state.cameraEyeOffsetYLocked = m_view->isCameraEyeOffsetYLocked();
     state.cameraEyeOffsetZLocked = m_view->isCameraEyeOffsetZLocked();
@@ -743,6 +1269,10 @@ void MainWindow::applyPanelState(const PanelState &state) {
     m_view->setZoomLocked(false);
     m_view->setCapPolarAngleLocked(false);
     m_view->setGlobeRadiusLocked(false);
+    m_view->setGlobeOrientationScalarLocked(false);
+    m_view->setGlobeOrientationXLocked(false);
+    m_view->setGlobeOrientationYLocked(false);
+    m_view->setGlobeOrientationZLocked(false);
     m_view->setCameraEyeOffsetXLocked(false);
     m_view->setCameraEyeOffsetYLocked(false);
     m_view->setCameraEyeOffsetZLocked(false);
@@ -762,7 +1292,7 @@ void MainWindow::applyPanelState(const PanelState &state) {
     m_view->setCapPolarAngle(state.capPolarAngle);
     m_view->setGlobeRadius(state.globeRadius);
     m_view->setGlobeOrientation(state.globeOrientation);
-    m_view->setFisheyeImagePath(state.fisheyeImagePath);
+    m_view->setFisheyeImagePath(resolveFisheyeImagePath(state.fisheyeImagePath));
     m_view->setPerspectiveFovY(state.perspectiveFovY);
     m_view->setCameraEyeOffsetX(state.cameraEyeOffsetX);
     m_view->setCameraEyeOffsetY(state.cameraEyeOffsetY);
@@ -770,10 +1300,14 @@ void MainWindow::applyPanelState(const PanelState &state) {
     m_view->setCameraUpX(state.cameraUpX);
     m_view->setCameraUpY(state.cameraUpY);
     m_view->setCameraUpZ(state.cameraUpZ);
+    m_view->setRearHemisphereWireframeVisible(state.rearHemisphereWireframeVisible);
+    m_view->setWorldAxesVisible(state.worldAxesVisible);
+    m_view->setLocalCoordinateFrameVisible(state.localCoordinateFrameVisible);
     m_view->setGlobalCenterFixed(state.globalCenterFixed);
     m_view->setPanoramaBandVisible(state.panoramaBandVisible);
     m_view->setXTangentCylinderVisible(state.xTangentCylinderVisible);
     m_view->setSurfaceDepthHidingEnabled(state.surfaceDepthHidingEnabled);
+    m_view->setCapClosed(state.capClosed);
     m_view->setPerspectiveProjection(state.perspectiveProjection);
     m_view->setComponentLength(FrameMath::ComponentId::PositiveX, state.positiveX);
     m_view->setComponentLength(FrameMath::ComponentId::NegtiveX, state.negtiveX);
@@ -787,6 +1321,10 @@ void MainWindow::applyPanelState(const PanelState &state) {
     m_view->setZoomLocked(state.zoomLocked);
     m_view->setCapPolarAngleLocked(state.capPolarAngleLocked);
     m_view->setGlobeRadiusLocked(state.globeRadiusLocked);
+    m_view->setGlobeOrientationScalarLocked(state.globeOrientationScalarLocked);
+    m_view->setGlobeOrientationXLocked(state.globeOrientationXLocked);
+    m_view->setGlobeOrientationYLocked(state.globeOrientationYLocked);
+    m_view->setGlobeOrientationZLocked(state.globeOrientationZLocked);
     m_view->setCameraEyeOffsetXLocked(state.cameraEyeOffsetXLocked);
     m_view->setCameraEyeOffsetYLocked(state.cameraEyeOffsetYLocked);
     m_view->setCameraEyeOffsetZLocked(state.cameraEyeOffsetZLocked);
@@ -826,18 +1364,167 @@ void MainWindow::saveStateFiles() {
     savePanelStateToJson(defaultStateJsonPath(), m_defaultStateProfile);
 }
 
+bool MainWindow::setShowingCurrentState(bool showCurrent, bool persistRuntimeState) {
+    if (showCurrent == m_showingCurrentState) {
+        if (persistRuntimeState) {
+            saveActiveProfileRuntimeState();
+        }
+        return false;
+    }
+
+    if (!showCurrent) {
+        m_currentStateSnapshot = capturePanelState();
+        m_showingCurrentState = false;
+        applyDefaultPanelState();
+    } else {
+        m_showingCurrentState = true;
+        applyPanelState(m_currentStateSnapshot);
+    }
+
+    syncInfoPanel();
+    if (persistRuntimeState) {
+        saveActiveProfileRuntimeState();
+    }
+    return true;
+}
+
+void MainWindow::configureStateFileWatcher() {
+    if (m_stateFileWatcher == nullptr) {
+        m_stateFileWatcher = new QFileSystemWatcher(this);
+    }
+
+    const auto watchFile = [this](const QString &path) {
+        if (QFileInfo::exists(path) && !m_stateFileWatcher->files().contains(path)) {
+            m_stateFileWatcher->addPath(path);
+        }
+    };
+    watchFile(currentStateJsonPath());
+    watchFile(defaultStateJsonPath());
+    watchFile(activeProfileRuntimeJsonPath());
+
+    connect(m_stateFileWatcher, &QFileSystemWatcher::fileChanged, this, [this](const QString &) {
+        QTimer::singleShot(120, this, [this]() {
+            reloadExternalStateFiles();
+        });
+    });
+}
+
+void MainWindow::reloadExternalStateFiles() {
+    if (m_stateFileWatcher != nullptr) {
+        const auto watchFile = [this](const QString &path) {
+            if (QFileInfo::exists(path) && !m_stateFileWatcher->files().contains(path)) {
+                m_stateFileWatcher->addPath(path);
+            }
+        };
+        watchFile(currentStateJsonPath());
+        watchFile(defaultStateJsonPath());
+        watchFile(activeProfileRuntimeJsonPath());
+    }
+
+    m_defaultStateProfile = loadPanelStateFromJson(defaultStateJsonPath(), m_defaultStateProfile);
+    m_currentStateSnapshot = loadPanelStateFromJson(currentStateJsonPath(), m_defaultStateProfile);
+    m_showingCurrentState = readActiveProfileRuntimeState(m_showingCurrentState);
+    const double runtimeFontScale = readUiFontScaleRuntimeState(m_uiFontScale);
+    if (std::abs(runtimeFontScale - m_uiFontScale) > 1e-6) {
+        m_uiFontScale = runtimeFontScale;
+        applyUiFontScale();
+    }
+
+    if (m_showingCurrentState) {
+        applyPanelState(m_currentStateSnapshot);
+    } else {
+        applyPanelState(m_defaultStateProfile);
+    }
+    syncInfoPanel();
+}
+
+bool MainWindow::readActiveProfileRuntimeState(bool fallbackShowCurrent) const {
+    QFile file(activeProfileRuntimeJsonPath());
+    if (!file.open(QIODevice::ReadOnly)) {
+        return fallbackShowCurrent;
+    }
+
+    const QJsonDocument document = QJsonDocument::fromJson(file.readAll());
+    if (!document.isObject()) {
+        return fallbackShowCurrent;
+    }
+
+    const QString fallbackProfile = QString::fromLatin1(
+        fallbackShowCurrent ? kCurrentProfileName : kDefaultProfileName);
+    const QString activeProfile = document.object()
+                                      .value(QLatin1String(kActiveProfileKey))
+                                      .toString(fallbackProfile);
+    if (activeProfile == QLatin1String(kDefaultProfileName)
+        || activeProfile == QLatin1String(kLegacyDefaultProfileName)) {
+        return false;
+    }
+    if (activeProfile == QLatin1String(kCurrentProfileName)) {
+        return true;
+    }
+    return fallbackShowCurrent;
+}
+
+double MainWindow::readUiFontScaleRuntimeState(double fallbackScale) const {
+    QFile file(activeProfileRuntimeJsonPath());
+    if (!file.open(QIODevice::ReadOnly)) {
+        return std::clamp(fallbackScale, kMinUiFontScale, kMaxUiFontScale);
+    }
+
+    const QJsonDocument document = QJsonDocument::fromJson(file.readAll());
+    if (!document.isObject()) {
+        return std::clamp(fallbackScale, kMinUiFontScale, kMaxUiFontScale);
+    }
+
+    const double value = document.object()
+                             .value(QLatin1String(kUiFontScaleKey))
+                             .toDouble(fallbackScale);
+    if (!std::isfinite(value)) {
+        return std::clamp(fallbackScale, kMinUiFontScale, kMaxUiFontScale);
+    }
+    return std::clamp(value, kMinUiFontScale, kMaxUiFontScale);
+}
+
+void MainWindow::saveActiveProfileRuntimeState() const {
+    const QString path = activeProfileRuntimeJsonPath();
+    QDir dir(QFileInfo(path).absolutePath());
+    dir.mkpath(QStringLiteral("."));
+
+    QJsonObject json;
+    QFile existingFile(path);
+    if (existingFile.open(QIODevice::ReadOnly)) {
+        const QJsonDocument existingDocument = QJsonDocument::fromJson(existingFile.readAll());
+        if (existingDocument.isObject()) {
+            json = existingDocument.object();
+        }
+        existingFile.close();
+    }
+
+    json.insert(QLatin1String(kActiveProfileKey),
+                QString::fromLatin1(m_showingCurrentState ? kCurrentProfileName : kDefaultProfileName));
+    json.insert(QLatin1String(kUiFontScaleKey), panelNumber(m_uiFontScale));
+
+    QFile file(path);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+        return;
+    }
+    file.write(QJsonDocument(json).toJson(QJsonDocument::Indented));
+    file.close();
+}
+
 QString MainWindow::stateProfilesDirectory() const {
-    const QString baseDir =
-        QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
-    return QDir(baseDir).filePath(QLatin1String(kStateProfilesDirName));
+    return resolveAssetsDirectoryPath();
 }
 
 QString MainWindow::defaultStateJsonPath() const {
-    return QDir(stateProfilesDirectory()).filePath(QLatin1String(kDefaultStateFileName));
+    return QDir(stateProfilesDirectory()).filePath(QLatin1String(kPresetStateFileName));
 }
 
 QString MainWindow::currentStateJsonPath() const {
     return QDir(stateProfilesDirectory()).filePath(QLatin1String(kCurrentStateFileName));
+}
+
+QString MainWindow::activeProfileRuntimeJsonPath() const {
+    return QDir(stateProfilesDirectory()).filePath(QLatin1String(kRuntimeStateFileName));
 }
 
 MainWindow::PanelState MainWindow::loadPanelStateFromJson(const QString &path,
@@ -874,7 +1561,9 @@ MainWindow::PanelState MainWindow::loadPanelStateFromJson(const QString &path,
         readFloat("globe_orientation_x", state.globeOrientation.x()),
         readFloat("globe_orientation_y", state.globeOrientation.y()),
         readFloat("globe_orientation_z", state.globeOrientation.z()));
-    state.fisheyeImagePath = json.value("fisheye_image_path").toString(state.fisheyeImagePath);
+    state.fisheyeImagePath = hfcRelativeImagePath(
+        json.value("fisheye_image_path").toString(state.fisheyeImagePath));
+    state.profileComment = json.value(QLatin1String(kProfileCommentKey)).toString(state.profileComment);
     state.perspectiveFovY = readFloat("perspective_fov_y", state.perspectiveFovY);
     state.cameraEyeOffsetX = readFloat("camera_eye_offset_x", state.cameraEyeOffsetX);
     state.cameraEyeOffsetY = readFloat("camera_eye_offset_y", state.cameraEyeOffsetY);
@@ -882,10 +1571,14 @@ MainWindow::PanelState MainWindow::loadPanelStateFromJson(const QString &path,
     state.cameraUpX = readFloat("camera_up_x", state.cameraUpX);
     state.cameraUpY = readFloat("camera_up_y", state.cameraUpY);
     state.cameraUpZ = readFloat("camera_up_z", state.cameraUpZ);
+    state.rearHemisphereWireframeVisible = readBool("rear_hemisphere_wireframe_visible", state.rearHemisphereWireframeVisible);
+    state.worldAxesVisible = readBool("world_axes_visible", state.worldAxesVisible);
+    state.localCoordinateFrameVisible = readBool("local_coordinate_frame_visible", state.localCoordinateFrameVisible);
     state.globalCenterFixed = readBool("global_center_fixed", state.globalCenterFixed);
     state.panoramaBandVisible = readBool("panorama_band_visible", state.panoramaBandVisible);
     state.xTangentCylinderVisible = readBool("x_tangent_cylinder_visible", state.xTangentCylinderVisible);
     state.surfaceDepthHidingEnabled = readBool("surface_depth_hiding_enabled", state.surfaceDepthHidingEnabled);
+    state.capClosed = readBool("cap_closed", state.capClosed);
     state.perspectiveProjection = readBool("perspective_projection", state.perspectiveProjection);
     state.positiveX = readFloat("positive_x", state.positiveX);
     state.negtiveX = readFloat("negtive_x", state.negtiveX);
@@ -898,6 +1591,10 @@ MainWindow::PanelState MainWindow::loadPanelStateFromJson(const QString &path,
     state.zoomLocked = readBool("zoom_locked", state.zoomLocked);
     state.capPolarAngleLocked = readBool("cap_polar_angle_locked", state.capPolarAngleLocked);
     state.globeRadiusLocked = readBool("globe_radius_locked", state.globeRadiusLocked);
+    state.globeOrientationScalarLocked = readBool("globe_orientation_scalar_locked", state.globeOrientationScalarLocked);
+    state.globeOrientationXLocked = readBool("globe_orientation_x_locked", state.globeOrientationXLocked);
+    state.globeOrientationYLocked = readBool("globe_orientation_y_locked", state.globeOrientationYLocked);
+    state.globeOrientationZLocked = readBool("globe_orientation_z_locked", state.globeOrientationZLocked);
     state.cameraEyeOffsetXLocked = readBool("camera_eye_offset_x_locked", state.cameraEyeOffsetXLocked);
     state.cameraEyeOffsetYLocked = readBool("camera_eye_offset_y_locked", state.cameraEyeOffsetYLocked);
     state.cameraEyeOffsetZLocked = readBool("camera_eye_offset_z_locked", state.cameraEyeOffsetZLocked);
@@ -913,44 +1610,56 @@ MainWindow::PanelState MainWindow::loadPanelStateFromJson(const QString &path,
 }
 
 void MainWindow::savePanelStateToJson(const QString &path, const PanelState &state) const {
-    QDir dir(stateProfilesDirectory());
+    QDir dir(QFileInfo(path).absolutePath());
     dir.mkpath(QStringLiteral("."));
 
     QJsonObject json;
-    json.insert("latitude", state.latitude);
-    json.insert("longitude", state.longitude);
-    json.insert("roll", state.roll);
-    json.insert("zoom", state.zoom);
-    json.insert("cap_polar_angle", state.capPolarAngle);
-    json.insert("globe_radius", state.globeRadius);
-    json.insert("globe_orientation_scalar", state.globeOrientation.scalar());
-    json.insert("globe_orientation_x", state.globeOrientation.x());
-    json.insert("globe_orientation_y", state.globeOrientation.y());
-    json.insert("globe_orientation_z", state.globeOrientation.z());
-    json.insert("fisheye_image_path", state.fisheyeImagePath);
-    json.insert("perspective_fov_y", state.perspectiveFovY);
-    json.insert("camera_eye_offset_x", state.cameraEyeOffsetX);
-    json.insert("camera_eye_offset_y", state.cameraEyeOffsetY);
-    json.insert("camera_eye_offset_z", state.cameraEyeOffsetZ);
-    json.insert("camera_up_x", state.cameraUpX);
-    json.insert("camera_up_y", state.cameraUpY);
-    json.insert("camera_up_z", state.cameraUpZ);
+    auto insertNumber = [&json](const char *key, double value) {
+        json.insert(QLatin1String(key), panelNumber(value));
+    };
+    insertNumber("latitude", state.latitude);
+    insertNumber("longitude", state.longitude);
+    insertNumber("roll", state.roll);
+    insertNumber("zoom", state.zoom);
+    insertNumber("cap_polar_angle", state.capPolarAngle);
+    insertNumber("globe_radius", state.globeRadius);
+    insertNumber("globe_orientation_scalar", state.globeOrientation.scalar());
+    insertNumber("globe_orientation_x", state.globeOrientation.x());
+    insertNumber("globe_orientation_y", state.globeOrientation.y());
+    insertNumber("globe_orientation_z", state.globeOrientation.z());
+    json.insert("fisheye_image_path", hfcRelativeImagePath(state.fisheyeImagePath));
+    json.insert(QLatin1String(kProfileCommentKey), state.profileComment);
+    insertNumber("perspective_fov_y", state.perspectiveFovY);
+    insertNumber("camera_eye_offset_x", state.cameraEyeOffsetX);
+    insertNumber("camera_eye_offset_y", state.cameraEyeOffsetY);
+    insertNumber("camera_eye_offset_z", state.cameraEyeOffsetZ);
+    insertNumber("camera_up_x", state.cameraUpX);
+    insertNumber("camera_up_y", state.cameraUpY);
+    insertNumber("camera_up_z", state.cameraUpZ);
+    json.insert("rear_hemisphere_wireframe_visible", state.rearHemisphereWireframeVisible);
+    json.insert("world_axes_visible", state.worldAxesVisible);
+    json.insert("local_coordinate_frame_visible", state.localCoordinateFrameVisible);
     json.insert("global_center_fixed", state.globalCenterFixed);
     json.insert("panorama_band_visible", state.panoramaBandVisible);
     json.insert("x_tangent_cylinder_visible", state.xTangentCylinderVisible);
     json.insert("surface_depth_hiding_enabled", state.surfaceDepthHidingEnabled);
+    json.insert("cap_closed", state.capClosed);
     json.insert("perspective_projection", state.perspectiveProjection);
-    json.insert("positive_x", state.positiveX);
-    json.insert("negtive_x", state.negtiveX);
-    json.insert("positive_y", state.positiveY);
-    json.insert("negtive_y", state.negtiveY);
-    json.insert("positive_z", state.positiveZ);
+    insertNumber("positive_x", state.positiveX);
+    insertNumber("negtive_x", state.negtiveX);
+    insertNumber("positive_y", state.positiveY);
+    insertNumber("negtive_y", state.negtiveY);
+    insertNumber("positive_z", state.positiveZ);
     json.insert("latitude_locked", state.latitudeLocked);
     json.insert("longitude_locked", state.longitudeLocked);
     json.insert("roll_locked", state.rollLocked);
     json.insert("zoom_locked", state.zoomLocked);
     json.insert("cap_polar_angle_locked", state.capPolarAngleLocked);
     json.insert("globe_radius_locked", state.globeRadiusLocked);
+    json.insert("globe_orientation_scalar_locked", state.globeOrientationScalarLocked);
+    json.insert("globe_orientation_x_locked", state.globeOrientationXLocked);
+    json.insert("globe_orientation_y_locked", state.globeOrientationYLocked);
+    json.insert("globe_orientation_z_locked", state.globeOrientationZLocked);
     json.insert("camera_eye_offset_x_locked", state.cameraEyeOffsetXLocked);
     json.insert("camera_eye_offset_y_locked", state.cameraEyeOffsetYLocked);
     json.insert("camera_eye_offset_z_locked", state.cameraEyeOffsetZLocked);
@@ -974,7 +1683,7 @@ void MainWindow::savePanelStateToJson(const QString &path, const PanelState &sta
 QDoubleSpinBox *MainWindow::createSpinBox(double minValue, double maxValue, double step, int decimals) {
     auto *spin = new QDoubleSpinBox(this);
     spin->setRange(minValue, maxValue);
-    spin->setDecimals(decimals);
+    spin->setDecimals(panelDecimals(decimals));
     spin->setSingleStep(step);
     spin->setKeyboardTracking(true);
     spin->setAccelerated(true);
@@ -1013,49 +1722,59 @@ void MainWindow::syncInfoPanel() {
     const QSignalBlocker b7(m_globeOrientationXSpin);
     const QSignalBlocker b8(m_globeOrientationYSpin);
     const QSignalBlocker b9(m_globeOrientationZSpin);
-    const QSignalBlocker b10(m_perspectiveFovYSpin);
-    const QSignalBlocker b11(m_cameraEyeOffsetXSpin);
-    const QSignalBlocker b12(m_cameraEyeOffsetYSpin);
-    const QSignalBlocker b13(m_cameraEyeOffsetZSpin);
-    const QSignalBlocker b14(m_cameraTargetXSpin);
-    const QSignalBlocker b15(m_cameraTargetYSpin);
-    const QSignalBlocker b16(m_cameraTargetZSpin);
-    const QSignalBlocker b17(m_cameraUpXSpin);
-    const QSignalBlocker b18(m_cameraUpYSpin);
-    const QSignalBlocker b19(m_cameraUpZSpin);
-    const QSignalBlocker b20(m_anchorXSpin);
-    const QSignalBlocker b21(m_anchorYSpin);
-    const QSignalBlocker b22(m_anchorZSpin);
-    const QSignalBlocker b23(m_positiveXSpin);
-    const QSignalBlocker b24(m_negtiveXSpin);
-    const QSignalBlocker b25(m_positiveYSpin);
-    const QSignalBlocker b26(m_negtiveYSpin);
-    const QSignalBlocker b27(m_positiveZSpin);
-    const QSignalBlocker b28(m_negtiveZSpin);
-    const QSignalBlocker b29(m_latitudeLock);
-    const QSignalBlocker b30(m_longitudeLock);
-    const QSignalBlocker b31(m_rollLock);
-    const QSignalBlocker b32(m_zoomLock);
-    const QSignalBlocker b33(m_capPolarAngleLock);
-    const QSignalBlocker b34(m_globeRadiusLock);
-    const QSignalBlocker b35(m_cameraEyeOffsetXLock);
-    const QSignalBlocker b36(m_cameraEyeOffsetYLock);
-    const QSignalBlocker b37(m_cameraEyeOffsetZLock);
-    const QSignalBlocker b38(m_cameraUpXLock);
-    const QSignalBlocker b39(m_cameraUpYLock);
-    const QSignalBlocker b40(m_cameraUpZLock);
-    const QSignalBlocker b41(m_positiveXLock);
-    const QSignalBlocker b42(m_negtiveXLock);
-    const QSignalBlocker b43(m_positiveYLock);
-    const QSignalBlocker b44(m_negtiveYLock);
-    const QSignalBlocker b45(m_positiveZLock);
-    const QSignalBlocker b46(m_currentHeaderButton);
-    const QSignalBlocker b47(m_defaultHeaderButton);
-    const QSignalBlocker b48(m_centerButton);
-    const QSignalBlocker b49(m_yTraceButton);
-    const QSignalBlocker b50(m_xCylinderButton);
-    const QSignalBlocker b51(m_surfaceDepthButton);
-    const QSignalBlocker b52(m_projectionButton);
+    const QSignalBlocker b10(m_eulerAxisXSpin);
+    const QSignalBlocker b11(m_eulerAxisYSpin);
+    const QSignalBlocker b12(m_eulerAxisZSpin);
+    const QSignalBlocker b13(m_eulerAngleSpin);
+    const QSignalBlocker b14(m_perspectiveFovYSpin);
+    const QSignalBlocker b15(m_cameraEyeOffsetXSpin);
+    const QSignalBlocker b16(m_cameraEyeOffsetYSpin);
+    const QSignalBlocker b17(m_cameraEyeOffsetZSpin);
+    const QSignalBlocker b18(m_cameraTargetXSpin);
+    const QSignalBlocker b19(m_cameraTargetYSpin);
+    const QSignalBlocker b20(m_cameraTargetZSpin);
+    const QSignalBlocker b21(m_cameraUpXSpin);
+    const QSignalBlocker b22(m_cameraUpYSpin);
+    const QSignalBlocker b23(m_cameraUpZSpin);
+    const QSignalBlocker b24(m_anchorXSpin);
+    const QSignalBlocker b25(m_anchorYSpin);
+    const QSignalBlocker b26(m_anchorZSpin);
+    const QSignalBlocker b27(m_positiveXSpin);
+    const QSignalBlocker b28(m_negtiveXSpin);
+    const QSignalBlocker b29(m_positiveYSpin);
+    const QSignalBlocker b30(m_negtiveYSpin);
+    const QSignalBlocker b31(m_positiveZSpin);
+    const QSignalBlocker b32(m_negtiveZSpin);
+    const QSignalBlocker b33(m_vaSpin);
+    const QSignalBlocker b34(m_latitudeLock);
+    const QSignalBlocker b35(m_longitudeLock);
+    const QSignalBlocker b36(m_rollLock);
+    const QSignalBlocker b37(m_zoomLock);
+    const QSignalBlocker b38(m_capPolarAngleLock);
+    const QSignalBlocker b39(m_globeRadiusLock);
+    const QSignalBlocker globeOrientationWLockBlocker(m_globeOrientationWLock);
+    const QSignalBlocker globeOrientationXLockBlocker(m_globeOrientationXLock);
+    const QSignalBlocker globeOrientationYLockBlocker(m_globeOrientationYLock);
+    const QSignalBlocker globeOrientationZLockBlocker(m_globeOrientationZLock);
+    const QSignalBlocker b40(m_cameraEyeOffsetXLock);
+    const QSignalBlocker b41(m_cameraEyeOffsetYLock);
+    const QSignalBlocker b42(m_cameraEyeOffsetZLock);
+    const QSignalBlocker b43(m_cameraUpXLock);
+    const QSignalBlocker b44(m_cameraUpYLock);
+    const QSignalBlocker b45(m_cameraUpZLock);
+    const QSignalBlocker b46(m_positiveXLock);
+    const QSignalBlocker b47(m_negtiveXLock);
+    const QSignalBlocker b48(m_positiveYLock);
+    const QSignalBlocker b49(m_negtiveYLock);
+    const QSignalBlocker b50(m_positiveZLock);
+    const QSignalBlocker b51(m_currentHeaderButton);
+    const QSignalBlocker b52(m_defaultHeaderButton);
+    const QSignalBlocker b53(m_centerButton);
+    const QSignalBlocker b54(m_yTraceButton);
+    const QSignalBlocker b55(m_xCylinderButton);
+    const QSignalBlocker b56(m_surfaceDepthButton);
+    const QSignalBlocker b57(m_capClosedButton);
+    const QSignalBlocker b58(m_projectionButton);
 
     m_activeLabel->setText(tr("%1  [x/X y/Y z/Z]").arg(m_view->activeComponentKey()));
     if (m_view->fisheyeImagePath().isEmpty()) {
@@ -1084,6 +1803,10 @@ void MainWindow::syncInfoPanel() {
     m_surfaceDepthButton->setText(m_view->isSurfaceDepthHidingEnabled()
                                       ? tr("on  [toggle here or right click menu]")
                                       : tr("off  [toggle here or right click menu]"));
+    m_capClosedButton->setChecked(m_view->isCapClosed());
+    m_capClosedButton->setText(m_view->isCapClosed()
+                                   ? tr("on  [toggle here or right click menu]")
+                                   : tr("off  [toggle here or right click menu]"));
     m_projectionButton->setChecked(m_view->isPerspectiveProjection());
     m_projectionButton->setText(m_view->isPerspectiveProjection()
                                     ? tr("perspective  [toggle here]")
@@ -1100,6 +1823,11 @@ void MainWindow::syncInfoPanel() {
     m_globeOrientationXSpin->setValue(m_view->globeOrientation().x());
     m_globeOrientationYSpin->setValue(m_view->globeOrientation().y());
     m_globeOrientationZSpin->setValue(m_view->globeOrientation().z());
+    const AxisAngleComponents axisAngle = axisAngleFromQuaternion(m_view->globeOrientation());
+    m_eulerAxisXSpin->setValue(axisAngle.axisX);
+    m_eulerAxisYSpin->setValue(axisAngle.axisY);
+    m_eulerAxisZSpin->setValue(axisAngle.axisZ);
+    m_eulerAngleSpin->setValue(axisAngle.angleDegrees);
     m_cameraEyeOffsetXSpin->setValue(m_view->cameraEyeOffsetX());
     m_cameraEyeOffsetYSpin->setValue(m_view->cameraEyeOffsetY());
     m_cameraEyeOffsetZSpin->setValue(m_view->cameraEyeOffsetZ());
@@ -1116,6 +1844,7 @@ void MainWindow::syncInfoPanel() {
     m_positiveXSpin->setValue(m_view->componentLength(FrameMath::ComponentId::PositiveX));
     m_negtiveXSpin->setValue(m_view->componentLength(FrameMath::ComponentId::NegtiveX));
     m_positiveYSpin->setValue(m_view->componentLength(FrameMath::ComponentId::PositiveY));
+    m_vaSpin->setValue(vaAngleDegrees(m_view->componentLength(FrameMath::ComponentId::PositiveY), m_view->globeRadius()));
     m_negtiveYSpin->setValue(m_view->componentLength(FrameMath::ComponentId::NegtiveY));
     m_positiveZSpin->setValue(m_view->componentLength(FrameMath::ComponentId::PositiveZ));
     m_negtiveZSpin->setValue(m_view->componentLength(FrameMath::ComponentId::NegtiveZ));
@@ -1124,6 +1853,10 @@ void MainWindow::syncInfoPanel() {
     m_rollLock->setChecked(m_view->isRollLocked());
     m_zoomLock->setChecked(m_view->isZoomLocked());
     m_capPolarAngleLock->setChecked(m_view->isCapPolarAngleLocked());
+    m_globeOrientationWLock->setChecked(m_view->isGlobeOrientationScalarLocked());
+    m_globeOrientationXLock->setChecked(m_view->isGlobeOrientationXLocked());
+    m_globeOrientationYLock->setChecked(m_view->isGlobeOrientationYLocked());
+    m_globeOrientationZLock->setChecked(m_view->isGlobeOrientationZLocked());
     m_cameraEyeOffsetXLock->setChecked(m_view->isCameraEyeOffsetXLocked());
     m_cameraEyeOffsetYLock->setChecked(m_view->isCameraEyeOffsetYLocked());
     m_cameraEyeOffsetZLock->setChecked(m_view->isCameraEyeOffsetZLocked());
@@ -1143,6 +1876,10 @@ void MainWindow::syncInfoPanel() {
     m_zoomSpin->setEnabled(!m_view->isZoomLocked());
     m_capPolarAngleSpin->setEnabled(!m_view->isCapPolarAngleLocked());
     m_globeRadiusSpin->setEnabled(!m_view->isGlobeRadiusLocked());
+    m_globeOrientationWSpin->setEnabled(!m_view->isGlobeOrientationScalarLocked());
+    m_globeOrientationXSpin->setEnabled(!m_view->isGlobeOrientationXLocked());
+    m_globeOrientationYSpin->setEnabled(!m_view->isGlobeOrientationYLocked());
+    m_globeOrientationZSpin->setEnabled(!m_view->isGlobeOrientationZLocked());
     m_cameraEyeOffsetXSpin->setEnabled(!m_view->isCameraEyeOffsetXLocked());
     m_cameraEyeOffsetYSpin->setEnabled(!m_view->isCameraEyeOffsetYLocked());
     m_cameraEyeOffsetZSpin->setEnabled(!m_view->isCameraEyeOffsetZLocked());

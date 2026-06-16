@@ -87,7 +87,7 @@ This is important because the fisheye image is defined in globe-local coordinate
 
 ### 3.2 Cap Angle
 
-The mapping currently assumes an equid-solid fisheye with:
+The mapping currently assumes an equisolid-angle fisheye with:
 
 ```cpp
 constexpr float kEntaniyaCapAngleDegrees = 140.0f;
@@ -100,7 +100,7 @@ The code computes:
 
 If `thetaDegrees > 140`, the point is outside the valid fisheye cap and returns an invalid `QColor`.
 
-### 3.3 Equid-Solid Radius
+### 3.3 Equisolid-Angle Radius
 
 The normalized image-disc radius is computed as:
 
@@ -114,7 +114,7 @@ where:
 - `thetaRadians` is the angular distance from the local `+z` axis
 - `capHalfRadians = 0.5 * 140°`
 
-This is the inverse equid-solid mapping used by the current code.
+This is the inverse equisolid-angle mapping used by the current code.
 
 ### 3.4 Image Coordinates
 
@@ -190,17 +190,18 @@ This higher tessellation is necessary because the mapped image is baked into per
 
 ## 7. Cylinder Variant
 
-The x-tangential cylinder uses a related but different sampling path:
+The x-tangential cylinder now uses a shader sampling path:
 
-- `sampleProjectionColorNearest(const QVector3D &worldPoint) const`
+- `drawTexturedCylinderVertices(...)`
 
 Differences from the globe:
 
-- same inverse globe-local and equid-solid mapping
+- same inverse globe-local and equisolid-angle mapping
 - same extracted circle center/radius
-- but sampling uses nearest pixel, not bicubic interpolation
+- sampling happens per fragment from an uploaded fisheye `QOpenGLTexture`
+- the texture uses nearest filtering for parity with the previous nearest-pixel cylinder behavior
 
-That is intentional in the current implementation because the cylinder wall is textured by inverse-mapping each wall triangle back to the globe image using triangle-centroid sampling.
+The previous CPU helper, `sampleProjectionColorNearest(...)`, is still present, but the active cylinder surface path uses shader lookup while `kUseTexturedCylinderShader` is enabled.
 
 ## 8. Default Image Source
 
@@ -214,26 +215,38 @@ The widget also falls back to:
 
 if `circular.png` is not available.
 
-The startup/default profile logic may override that with a user-selected image path from:
+The startup/preset profile logic may override that with a user-selected image path from:
 
-- `default_state.json`
-- `current_state.json`
+- `assets/preset_state.json`
+- `assets/current_state.json`
 
 ## 9. Current Limitations
 
 The current mapping method has several practical limits:
 
 - it is per-vertex color mapping, not true texture UV sampling in the shader
-- quality still depends on sphere tessellation density
+- globe quality still depends on sphere tessellation density
 - the `140°` cap is fixed in code
 - the circle extraction is heuristic, not a robust calibrated lens-fit
-- the globe uses bicubic sampling, but the cylinder currently uses nearest sampling
+- the globe uses CPU bicubic sampling, while the cylinder uses shader texture sampling with nearest filtering
+- projection type, image flips, and calibrated pixel-to-ray maps are not yet profile-controlled
 
-## 10. Summary
+## 10. Next Development Plan
+
+The next mapping work is planned in [FISHEYE_GLOBE_MAPPING_PLAN.md](FISHEYE_GLOBE_MAPPING_PLAN.md).
+
+That plan covers:
+
+- multiple projection models: equisolid, equidistant, stereographic, orthographic, rectilinear, and pixel-ray map
+- profile fields for fisheye projection, cap angle, manual circle override, and horizontal/vertical flip
+- calibrated pixel-to-spatial-ray discrete maps and the required inverse lookup from globe ray to image pixel
+- keeping CPU and GPU sampling behavior aligned
+
+## 11. Summary
 
 The current image-to-globe mapping is:
 
-- inverse equid-solid projection
+- inverse equisolid-angle projection
 - based on an extracted valid fisheye disc
 - evaluated in globe-local coordinates
 - sampled bicubically for the globe

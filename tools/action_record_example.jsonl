@@ -1,0 +1,8 @@
+{"type":"start_snapshot","current":"assets/current_state.json","preset":"assets/preset_state.json","active":"current","t":0.0}
+{"type":"active_profile","profile":"current","t":0.05}
+{"type":"set","profile":"current","key":"latitude","value":20.0,"t":0.10}
+{"type":"set","profile":"current","key":"longitude","value":35.0,"t":0.20}
+{"type":"set","profile":"current","key":"zoom","value":0.81,"t":0.30}
+{"type":"set","profile":"current","key":"world_axes_visible","value":true,"t":0.40}
+{"type":"set","profile":"current","key":"fisheye_image_path","value":"GOPR0308.JPG","t":0.50}
+{"type":"local_axis_rotation","profile":"current","axis":"z","degrees":15.0,"t":0.60}
