@@ -8,7 +8,8 @@ This file records user-requested work completed in this workspace. Job `000` is 
 |---|---|---|---|
 | 001 | 2026-08-16 | Document the repository in detail | Completed |
 | 002 | 2026-08-16 | Prefix root Markdown files by creation sequence | Completed |
-| 003 | 2026-08-16 | Commit documentation locally and publish it remotely | Partially completed |
+| 003 | 2026-08-16 | Commit documentation locally and publish it remotely | Completed |
+| 004 | 2026-08-16 | Configure GitHub authentication | Completed |
 
 ## Job 001 — Detailed repository documentation
 
@@ -42,7 +43,18 @@ This file records user-requested work completed in this workspace. Job `000` is 
   - Created local commit `18eb1dc` (`docs: sequence and consolidate repository documentation`).
   - Attempted to push branch `Auto-Demo-Script-Development` to `origin` over HTTPS; GitHub credentials were unavailable.
   - Retried through the existing SSH key without changing the configured remote; GitHub rejected the key with `Permission denied (publickey)`.
-- **Outcome:** Partially completed. The local repository is committed, but remote publication is blocked until HTTPS or SSH GitHub authentication is configured for this environment.
+  - After GitHub CLI authentication was connected to Git, pushed the pending commits to `origin/Auto-Demo-Script-Development`.
+- **Outcome:** Completed. The documentation commits were created locally and published to the remote branch.
+
+## Job 004 — Configure GitHub authentication
+
+- **Date:** 2026-08-16
+- **Request:** Configure GitHub authentication for this environment.
+- **Work:**
+  - Verified that GitHub CLI was already authenticated as account `cjchng` with repository access.
+  - Ran `gh auth setup-git` to connect Git's HTTPS credential helper to the authenticated GitHub CLI credential store.
+  - Verified the configured GitHub credential helper and successfully pushed the pending branch commits.
+- **Outcome:** Completed. HTTPS Git operations can now use the existing GitHub CLI authentication.
 
 ---
 
