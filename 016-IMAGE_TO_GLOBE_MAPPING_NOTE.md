@@ -233,7 +233,7 @@ The current mapping method has several practical limits:
 
 ## 10. Next Development Plan
 
-The next mapping work is planned in [FISHEYE_GLOBE_MAPPING_PLAN.md](FISHEYE_GLOBE_MAPPING_PLAN.md).
+The next mapping work is planned in [023-FISHEYE_GLOBE_MAPPING_PLAN.md](023-FISHEYE_GLOBE_MAPPING_PLAN.md).
 
 That plan covers:
 

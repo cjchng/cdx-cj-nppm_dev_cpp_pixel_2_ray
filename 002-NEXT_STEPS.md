@@ -33,5 +33,5 @@ Suggested resume prompt:
 Continue from /home/cj/Documents/cdx-cj-nppm_dev_cpp_pixel_2_ray.
 Use branch master.
 Last good checkpoint: f97b910.
-Read NEXT_STEPS.md and continue with orbit/pan camera controls.
+Read 002-NEXT_STEPS.md and continue with orbit/pan camera controls.
 ```

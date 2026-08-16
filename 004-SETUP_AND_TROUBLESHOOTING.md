@@ -2,7 +2,7 @@
 
 This note records the setup problems encountered while configuring this project on Ubuntu 22.04 and explains what each required build tool or library does.
 
-Use it as the practical companion to [README.md](/home/cj/Documents/cdx-cj-nppm_dev_cpp_pixel_2_ray/README.md) when you need to rebuild the project or extend it.
+Use it as the practical companion to [001-README.md](/home/cj/Documents/cdx-cj-nppm_dev_cpp_pixel_2_ray/001-README.md) when you need to rebuild the project or extend it.
 
 ## Required Packages
 

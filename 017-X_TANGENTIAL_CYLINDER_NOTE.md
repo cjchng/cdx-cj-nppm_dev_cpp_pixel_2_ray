@@ -174,4 +174,4 @@ Its shape is derived from:
 
 - [src/PixelToRayWidget.cpp](/Users/cj/Documents/cdx-cj-nppm_dev_cpp_pixel_2_ray/src/PixelToRayWidget.cpp)
 - [src/PixelToRayWidget.h](/Users/cj/Documents/cdx-cj-nppm_dev_cpp_pixel_2_ray/src/PixelToRayWidget.h)
-- [USER_MANUAL.md](/Users/cj/Documents/cdx-cj-nppm_dev_cpp_pixel_2_ray/USER_MANUAL.md)
+- [009-USER_MANUAL.md](/Users/cj/Documents/cdx-cj-nppm_dev_cpp_pixel_2_ray/009-USER_MANUAL.md)

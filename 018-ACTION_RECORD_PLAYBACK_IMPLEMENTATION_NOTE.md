@@ -693,4 +693,3 @@ Add integration tests when practical:
 3. verify the generated JSONL
 4. replay the JSONL into a fresh temporary assets directory
 5. compare final Current/Preset/runtime state
-

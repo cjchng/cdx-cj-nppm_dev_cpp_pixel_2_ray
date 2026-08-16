@@ -292,7 +292,7 @@ http://127.0.0.1:8765/
 
 The browser UI edits the same `Current` and `Preset` profiles in `assets/`. The running Qt app watches those files and reloads external edits. Most configuration sections show Current and Preset side by side as columns in one unified configuration panel. Use the Current/Preset switch in the browser header, or click a browser column header, to choose the active browser profile. Each browser panel title includes a `+` / `-` button to expand or collapse that panel; the collapsed-panel set is remembered in browser `localStorage`. The `Globe Orientation` panel also has local `+` / `-` controls for its Euler axis-angle and local-axis rotation subsections; those collapsed states are remembered in browser `localStorage` and do not change Current or Preset values. The Image panel is active-profile-only and shows only the selected Current or Preset image path.
 
-The Qt application and browser UI synchronize profile values through JSON files. They also synchronize the active `Current` / `Preset` mode through `assets/ui_runtime_state.json`, so switching mode in either UI should switch the other UI. See [APP_UI_SERVER_COLLABORATION.md](APP_UI_SERVER_COLLABORATION.md).
+The Qt application and browser UI synchronize profile values through JSON files. They also synchronize the active `Current` / `Preset` mode through `assets/ui_runtime_state.json`, so switching mode in either UI should switch the other UI. See [020-APP_UI_SERVER_COLLABORATION.md](020-APP_UI_SERVER_COLLABORATION.md).
 
 The browser page title and header include the active `IP:port`, for example `Pixel To Ray Browser Config - 127.0.0.1:8765`.
 
@@ -318,14 +318,14 @@ The app opens on the leftmost available screen. The startup path was adjusted to
 - removing the extra `window.show()` path
 - deferring fullscreen entry until the event loop starts
 
-See [FULLSCREEN_STARTUP_NOTE.md](/Users/cj/Documents/cdx-cj-nppm_dev_cpp_pixel_2_ray/FULLSCREEN_STARTUP_NOTE.md).
+See [012-FULLSCREEN_STARTUP_NOTE.md](/Users/cj/Documents/cdx-cj-nppm_dev_cpp_pixel_2_ray/012-FULLSCREEN_STARTUP_NOTE.md).
 
 ## File Map
 
-- [README.md](/Users/cj/Documents/cdx-cj-nppm_dev_cpp_pixel_2_ray/README.md): quick repo overview
+- [001-README.md](/Users/cj/Documents/cdx-cj-nppm_dev_cpp_pixel_2_ray/001-README.md): quick repo overview
 - [src/main.cpp](/Users/cj/Documents/cdx-cj-nppm_dev_cpp_pixel_2_ray/src/main.cpp): app bootstrap
 - [src/MainWindow.cpp](/Users/cj/Documents/cdx-cj-nppm_dev_cpp_pixel_2_ray/src/MainWindow.cpp): window, panel, commands menu, JSON profiles
 - [src/PixelToRayWidget.cpp](/Users/cj/Documents/cdx-cj-nppm_dev_cpp_pixel_2_ray/src/PixelToRayWidget.cpp): rendering and viewport interaction
 - [src/FrameMath.cpp](/Users/cj/Documents/cdx-cj-nppm_dev_cpp_pixel_2_ray/src/FrameMath.cpp): coordinate and frame math
-- [APP_UI_SERVER_COLLABORATION.md](APP_UI_SERVER_COLLABORATION.md): Qt/browser profile and mode synchronization boundary
-- [GLOBE_ORIENTATION_REFACTOR_NOTES.md](/Users/cj/Documents/cdx-cj-nppm_dev_cpp_pixel_2_ray/GLOBE_ORIENTATION_REFACTOR_NOTES.md): global orientation implementation notes
+- [020-APP_UI_SERVER_COLLABORATION.md](020-APP_UI_SERVER_COLLABORATION.md): Qt/browser profile and mode synchronization boundary
+- [013-GLOBE_ORIENTATION_REFACTOR_NOTES.md](/Users/cj/Documents/cdx-cj-nppm_dev_cpp_pixel_2_ray/013-GLOBE_ORIENTATION_REFACTOR_NOTES.md): global orientation implementation notes

@@ -2,7 +2,7 @@
 
 This file describes the normal edit-build-test loop for working on this project after the machine has already been configured.
 
-If setup is still failing, start with [SETUP_AND_TROUBLESHOOTING.md](/home/cj/Documents/cdx-cj-nppm_dev_cpp_pixel_2_ray/SETUP_AND_TROUBLESHOOTING.md).
+If setup is still failing, start with [004-SETUP_AND_TROUBLESHOOTING.md](/home/cj/Documents/cdx-cj-nppm_dev_cpp_pixel_2_ray/004-SETUP_AND_TROUBLESHOOTING.md).
 
 ## Normal Daily Loop
 

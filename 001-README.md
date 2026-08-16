@@ -17,8 +17,8 @@ This repository contains a C++/Qt Widgets rewrite of the original browser-based 
 
 You need a C++17 compiler, CMake, and Qt6 development packages.
 
-- Setup details: [SETUP_AND_TROUBLESHOOTING.md](/Users/cj/Documents/cdx-cj-nppm_dev_cpp_pixel_2_ray/SETUP_AND_TROUBLESHOOTING.md)
-- Normal edit/build/test loop: [DEVELOPER_WORKFLOW.md](/Users/cj/Documents/cdx-cj-nppm_dev_cpp_pixel_2_ray/DEVELOPER_WORKFLOW.md)
+- Setup details: [004-SETUP_AND_TROUBLESHOOTING.md](/Users/cj/Documents/cdx-cj-nppm_dev_cpp_pixel_2_ray/004-SETUP_AND_TROUBLESHOOTING.md)
+- Normal edit/build/test loop: [003-DEVELOPER_WORKFLOW.md](/Users/cj/Documents/cdx-cj-nppm_dev_cpp_pixel_2_ray/003-DEVELOPER_WORKFLOW.md)
 
 ```bash
 cmake -S . -B build
@@ -73,7 +73,7 @@ http://127.0.0.1:8765/
 
 The browser UI reads and writes `assets/current_state.json` and `assets/preset_state.json`. The running Qt app watches those files and reloads external edits. Most configuration sections show Current and Preset side by side as columns in one unified panel. Use the Current/Preset switch in the browser header, or click a browser column header, to choose the active browser profile. Each browser panel has a `+` / `-` title control for dynamic collapse/expand, remembered in browser `localStorage`. The `Globe Orientation` panel also has local `+` / `-` controls for the Euler axis-angle equivalent and local-axis rotation subsections; those collapsed states are stored only in browser `localStorage`. The Image panel is active-profile-only and shows only the selected Current or Preset image path.
 
-The Qt application and browser UI synchronize profile values through JSON files. They also synchronize the active `Current` / `Preset` mode through `assets/ui_runtime_state.json`, and Qt stores the persistent UI font scale in the same runtime file as `ui_font_scale`. See [APP_UI_SERVER_COLLABORATION.md](APP_UI_SERVER_COLLABORATION.md).
+The Qt application and browser UI synchronize profile values through JSON files. They also synchronize the active `Current` / `Preset` mode through `assets/ui_runtime_state.json`, and Qt stores the persistent UI font scale in the same runtime file as `ui_font_scale`. See [020-APP_UI_SERVER_COLLABORATION.md](020-APP_UI_SERVER_COLLABORATION.md).
 
 The browser page title and header include the active `IP:port`, for example `Pixel To Ray Browser Config - 127.0.0.1:8765`.
 
@@ -91,11 +91,11 @@ Compact lock toggle buttons are shown inline with their matching fields in the b
 
 - `assets/hfc-images/circular.png` is the built-in default fisheye image when no saved/preset profile overrides it.
 - Numeric configuration fields are displayed and saved with at most 2 digits after the decimal point.
-- Qt/browser collaboration and Current/Preset mode synchronization are documented in `APP_UI_SERVER_COLLABORATION.md`.
+- Qt/browser collaboration and Current/Preset mode synchronization are documented in `020-APP_UI_SERVER_COLLABORATION.md`.
 - Global orientation shows quaternion controls plus collapsible Euler axis-angle and local-axis rotation subsections in the browser UI.
-- Fisheye image-to-globe mapping and the next projection/ray-map/flip plan are documented in `IMAGE_TO_GLOBE_MAPPING_NOTE.md` and `FISHEYE_GLOBE_MAPPING_PLAN.md`.
-- Semantic action playback is documented in `ACTION_RECORD_PLAYBACK_PLAN.md`; implementation details and the `tools/action*.py` dissection are in `ACTION_RECORD_PLAYBACK_IMPLEMENTATION_NOTE.md`.
-- Current global orientation implementation details are documented in `GLOBE_ORIENTATION_REFACTOR_NOTES.md`.
+- Fisheye image-to-globe mapping and the next projection/ray-map/flip plan are documented in `016-IMAGE_TO_GLOBE_MAPPING_NOTE.md` and `023-FISHEYE_GLOBE_MAPPING_PLAN.md`.
+- Semantic action playback is documented in `019-ACTION_RECORD_PLAYBACK_PLAN.md`; implementation details and the `tools/action*.py` dissection are in `018-ACTION_RECORD_PLAYBACK_IMPLEMENTATION_NOTE.md`.
+- Current global orientation implementation details are documented in `013-GLOBE_ORIENTATION_REFACTOR_NOTES.md`.
 - The `Pixel To Ray Qt Window` opens on the leftmost available screen at startup.
 - `Global center (fix/move)` changes camera targeting, not the physical sphere center.
 - Global traces now use a separate palette and dashed/terminal-marker styling so they read differently from the local frame.

@@ -83,13 +83,13 @@ Current documentation was updated to use `Preset` and `preset_state.json` where 
 
 Updated documents included:
 
-- `README.md`
-- `USER_MANUAL.md`
-- `APP_UI_SERVER_COLLABORATION.md`
-- `IMAGE_TO_GLOBE_MAPPING_NOTE.md`
-- `GLOBE_ORIENTATION_REFACTOR_NOTES.md`
+- `001-README.md`
+- `009-USER_MANUAL.md`
+- `020-APP_UI_SERVER_COLLABORATION.md`
+- `016-IMAGE_TO_GLOBE_MAPPING_NOTE.md`
+- `013-GLOBE_ORIENTATION_REFACTOR_NOTES.md`
 
-Historical prompt logs, such as `SESSION_PROMPTS.md`, were intentionally left as historical records and may still contain older `Default` wording.
+Historical prompt logs, such as `008-SESSION_PROMPTS.md`, were intentionally left as historical records and may still contain older `Default` wording.
 
 ## Files Changed
 
@@ -106,11 +106,11 @@ Removed or replaced profile file:
 
 Related documentation:
 
-- `README.md`
-- `USER_MANUAL.md`
-- `APP_UI_SERVER_COLLABORATION.md`
-- `IMAGE_TO_GLOBE_MAPPING_NOTE.md`
-- `GLOBE_ORIENTATION_REFACTOR_NOTES.md`
+- `001-README.md`
+- `009-USER_MANUAL.md`
+- `020-APP_UI_SERVER_COLLABORATION.md`
+- `016-IMAGE_TO_GLOBE_MAPPING_NOTE.md`
+- `013-GLOBE_ORIENTATION_REFACTOR_NOTES.md`
 
 ## Verification
 

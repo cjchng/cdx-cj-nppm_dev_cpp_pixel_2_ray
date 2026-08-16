@@ -10,7 +10,7 @@ The goal is to support three future needs without breaking the current behavior:
 
 ## Current Mapping Contract
 
-The active implementation is documented in [IMAGE_TO_GLOBE_MAPPING_NOTE.md](IMAGE_TO_GLOBE_MAPPING_NOTE.md).
+The active implementation is documented in [016-IMAGE_TO_GLOBE_MAPPING_NOTE.md](016-IMAGE_TO_GLOBE_MAPPING_NOTE.md).
 
 The important current rule is that rendering is an inverse lookup:
 
@@ -488,4 +488,3 @@ Manual visual checks:
 5. Add manual circle override.
 6. Add pixel-ray map loader and CPU nearest inverse lookup.
 7. Revisit GPU shader unification after the data model is stable.
-

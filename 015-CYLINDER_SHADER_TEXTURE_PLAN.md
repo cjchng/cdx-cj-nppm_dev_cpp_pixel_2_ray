@@ -450,9 +450,9 @@ Status: done.
 Files:
 
 - `src/PixelToRayWidget.cpp`
-- `X_TANGENTIAL_CYLINDER_NOTE.md`
-- `IMAGE_TO_GLOBE_MAPPING_NOTE.md`
-- `USER_MANUAL.md`
+- `017-X_TANGENTIAL_CYLINDER_NOTE.md`
+- `016-IMAGE_TO_GLOBE_MAPPING_NOTE.md`
+- `009-USER_MANUAL.md`
 
 Changes:
 
@@ -476,10 +476,10 @@ Likely implementation files:
 
 Possible supporting documentation updates:
 
-- `X_TANGENTIAL_CYLINDER_NOTE.md`
-- `IMAGE_TO_GLOBE_MAPPING_NOTE.md`
-- `VIEWPORT_DRAW_SEQUENCE_NOTES.md`
-- `USER_MANUAL.md`
+- `017-X_TANGENTIAL_CYLINDER_NOTE.md`
+- `016-IMAGE_TO_GLOBE_MAPPING_NOTE.md`
+- `014-VIEWPORT_DRAW_SEQUENCE_NOTES.md`
+- `009-USER_MANUAL.md`
 
 ## Validation Checklist
 

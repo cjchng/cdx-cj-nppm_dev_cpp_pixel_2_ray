@@ -20,7 +20,7 @@ The first implementation is a playback script:
 
 The script replays JSONL actions through the browser UI server API.
 
-Detailed implementation notes and a dissection of the current `tools/action*.py` files are in [ACTION_RECORD_PLAYBACK_IMPLEMENTATION_NOTE.md](ACTION_RECORD_PLAYBACK_IMPLEMENTATION_NOTE.md).
+Detailed implementation notes and a dissection of the current `tools/action*.py` files are in [018-ACTION_RECORD_PLAYBACK_IMPLEMENTATION_NOTE.md](018-ACTION_RECORD_PLAYBACK_IMPLEMENTATION_NOTE.md).
 
 Supported action types:
 

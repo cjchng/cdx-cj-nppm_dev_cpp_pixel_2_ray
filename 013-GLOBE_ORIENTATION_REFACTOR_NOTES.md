@@ -566,7 +566,7 @@ The browser server writes the same `assets/*.json` files.
 
 When either file changes, `reloadExternalStateFiles()` reloads both profiles and reapplies the active mode to the widget. This is what lets browser-side orientation edits update the running Qt scene and right panel.
 
-Profile values synchronize through `assets/current_state.json` and `assets/preset_state.json`. Active `Current` / `Preset` mode synchronizes separately through `assets/ui_runtime_state.json`. See `APP_UI_SERVER_COLLABORATION.md`.
+Profile values synchronize through `assets/current_state.json` and `assets/preset_state.json`. Active `Current` / `Preset` mode synchronizes separately through `assets/ui_runtime_state.json`. See `020-APP_UI_SERVER_COLLABORATION.md`.
 
 ### Implementation Boundaries
 

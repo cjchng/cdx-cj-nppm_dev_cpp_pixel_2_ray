@@ -22,17 +22,17 @@ This file records the user prompts from the current session in chronological ord
 16. `Please ajust the cylder suface to inresect with the end point of the positive_z axis, i.e. with radian of 1+the_length_of_positive_z.`
 17. `please change color of the cylindrical wall to a color with a better contrast to that on the global surface.`
 18. `Please make the mouse a left-button tracking to adjust the local corordinte frame on the globe surface.`
-19. `Please update the USER_MANUAL.md`
+19. `Please update the 009-USER_MANUAL.md`
 20. `Please change the both cylinderical heights equal to "sqrt((postive_z+1) * (positive_z+1) + positive_y*positive_y))" and  "sqrt ((postive_z+1) * (positive_z+1) + negtive_y*negtive_y))".`
 21. `Please note, The code was updated by me.`
     `const float positiveHeight =  positiveY * xCylinderRadius;`
     `const float negativeHeight = negativeY  * xCylinderRadius;`
-22. `Please update USER_MANUAL.md`
+22. `Please update 009-USER_MANUAL.md`
 23. `The both x & y axial guiding static traces are too long and too strong.`
     `Please dimmer the static framed guiding tracings of the postive_x, the negatuive_x, the positive_y, & the negative_y.`
 24. `Can you recall all my prompts for this session to a markdown file`
 25. `please accompany a radio check for each editable field to temporary lock values in the editable field.`
-    `From now on, please update the SESSION_PROMPTS.md as well for my prompt.`
+    `From now on, please update the 008-SESSION_PROMPTS.md as well for my prompt.`
 26. `Please check the implementation of operations relate to the global operation`
 27. `Please explain more about " High: move mode corrupts sphere shading and front/back wireframe classification."`
 28. `(1) Please git a recovey tag here & document it.`
@@ -121,7 +121,7 @@ This file records the user prompts from the current session in chronological ord
 109. `Please document the current implementation of Global Orientation module`
 110. `Please explain in detail the tranfer from [Global q_?] to "Euler axis_?"  "GLOBAL_ORIENTATION_REFACTOR_NOTES.md", and explain its relation ship to roo-yaw-pitch`
 111. `+Despite the panel label, this is not a yaw/pitch/roll triplet. It is the single rotation axis plus the single rotation amount represented by the same quaternion.`
-112. `Let's refactor "CYLINDER_SHADER_TEXTURE_PLAN.md"`
+112. `Let's refactor "015-CYLINDER_SHADER_TEXTURE_PLAN.md"`
 113. `Please enhance files explorer functions to the imgage panel of the ui_server`
 114. `Let refactor "CYLINDER_SHADER_TEXTURE_PLAN" step by step`
 115. `Go!`
@@ -164,7 +164,7 @@ This file records the user prompts from the current session in chronological ord
 152. `Please document fields of [Camera]`
 153. `Please explain and revise the User Manual.md : Eye Offset: (x,y):(0.01, 0.0) is an offset rotation of (0.0, 0.01) and is not functional for (0.0, 0.0)`
 154. `Screenshots clarify Eye Offset X/Y examples: (0.01,0,-40), (0,0.01,-40), (0.01,0.01,-40), and the singular (0,0,-40) case`
-155. `Please put the upload images in the USER_MANUAL.md and explain them in detail.`
+155. `Please put the upload images in the 009-USER_MANUAL.md and explain them in detail.`
 156. `Pleae implement [pitch], [yaw], [roll] in [Clobal Orientation] for UI Server`
 157. `Refactor [Roll][Yaw][Pitch] as transient Enter-confirmed rotations around (Z)(Y)(X), reset to zero after confirmation, no spinner, subtle UI`
 158. `Remove the post-confirmation reset-to-zero behavior from the [Roll][Yaw][Pitch] UI Server controls`
@@ -205,7 +205,7 @@ This file records the user prompts from the current session in chronological ord
 193. `Do we need [Current save File] ?`
 194. `Yes`
 195. `(1) Extend "save" attribute to sub-dirctories of asset/saved_profiles; (2)Extend the editable file name include the path from asset for [SAVE]; (3) Remove label below, [Dirctory:...]`
-196. `Please update 'SESSION_PROMPTS.md'`
+196. `Please update '008-SESSION_PROMPTS.md'`
 197. `(2)Extend the label of the editable file name to that includes the relative path from asset dirctory on for [SAVE]`
 198. `(1) move module [PERSONAL COMMENT] below module [Profile File Browser]; [2] typo, Rename to [Profile Files Browser]`
 199. `Using 'SAVED" as an attribute in our implementation is easy to confuse with a normal file that has been saved.  Please suggest a more distinctive term for this app.`
