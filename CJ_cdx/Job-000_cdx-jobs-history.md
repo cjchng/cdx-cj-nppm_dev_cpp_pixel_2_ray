@@ -8,6 +8,7 @@ This file records user-requested work completed in this workspace. Job `000` is 
 |---|---|---|---|
 | 001 | 2026-08-16 | Document the repository in detail | Completed |
 | 002 | 2026-08-16 | Prefix root Markdown files by creation sequence | Completed |
+| 003 | 2026-08-16 | Commit documentation locally and publish it remotely | Partially completed |
 
 ## Job 001 — Detailed repository documentation
 
@@ -31,6 +32,17 @@ This file records user-requested work completed in this workspace. Job `000` is 
   - Renamed 25 root Markdown files with prefixes `001-` through `025-` and updated Markdown cross-references.
   - Preserved `CJ_cdx/Job-*` filenames because they follow the job-history naming contract.
 - **Outcome:** Completed. Repository-root Markdown names now expose their approximate creation sequence.
+
+## Job 003 — Commit and publish documentation
+
+- **Date:** 2026-08-16
+- **Request:** Commit the completed documentation work to the local repository, then update the remote repository.
+- **Work:**
+  - Staged only the Markdown documentation and history changes, leaving unrelated workspace changes unstaged.
+  - Created local commit `18eb1dc` (`docs: sequence and consolidate repository documentation`).
+  - Attempted to push branch `Auto-Demo-Script-Development` to `origin` over HTTPS; GitHub credentials were unavailable.
+  - Retried through the existing SSH key without changing the configured remote; GitHub rejected the key with `Permission denied (publickey)`.
+- **Outcome:** Partially completed. The local repository is committed, but remote publication is blocked until HTTPS or SSH GitHub authentication is configured for this environment.
 
 ---
 
